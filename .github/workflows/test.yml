@@ -17,6 +17,5 @@ jobs:
       cpu-args: '--release --features hdf5-static'
       # No GPU lane. An empty gpu-args skips the job entirely.
       gpu-args: ''
-      # hdf5-metno-src on Windows is untested here; turn on once it builds.
-      windows: false
+      windows: true
     secrets: inherit

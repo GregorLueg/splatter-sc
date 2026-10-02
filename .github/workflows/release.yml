@@ -23,5 +23,5 @@ jobs:
     with:
       binary: splatter-sc
       build-args: '--features hdf5-static'
-      windows: false
+      windows: true
     secrets: inherit

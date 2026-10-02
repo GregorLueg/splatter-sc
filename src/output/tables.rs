@@ -7,6 +7,10 @@ use crate::cells::CellMeta;
 use crate::genes::GeneTruth;
 use crate::params::{Method, SplatParams};
 
+/////////////
+// Helpers //
+/////////////
+
 /// Cell name as splatter writes it.
 ///
 /// ### Params

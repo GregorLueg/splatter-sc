@@ -13,6 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::errors::{SplatErrors, invalid};
 
+////////////
+// Consts //
+////////////
+
 /// Tolerance for `group.prob` summing to one, as R's `all.equal`.
 const GROUP_PROB_TOL: f64 = 1.5e-8;
 
@@ -80,6 +84,50 @@ fn f64_or_inf<'de, D: Deserializer<'de>>(de: D) -> Result<f64, D::Error> {
     }
 }
 
+/// Expand a length-one vector to `n`, as splatter's `paramsExpander`, and
+/// check the length otherwise.
+///
+/// ### Params
+///
+/// * `v` - Vector to expand in place
+/// * `n` - Target length
+/// * `name` - Parameter name for the error
+///
+/// ### Returns
+///
+/// `Ok(())`, or an error when the length is neither 1 nor `n`.
+fn expand(v: &mut Vec<f64>, n: usize, name: &str) -> Result<(), SplatErrors> {
+    if v.len() == 1 && n > 1 {
+        *v = vec![v[0]; n];
+    }
+    if v.len() != n {
+        return Err(invalid(
+            name,
+            format!("length {} but {n} expected", v.len()),
+        ));
+    }
+    Ok(())
+}
+
+/// Check every value of a vector against a closed range.
+///
+/// ### Params
+///
+/// * `v` - Values
+/// * `lo` - Lower bound
+/// * `hi` - Upper bound
+/// * `name` - Parameter name for the error
+///
+/// ### Returns
+///
+/// `Ok(())`, or an error naming the first offending value.
+fn check_range(v: &[f64], lo: f64, hi: f64, name: &str) -> Result<(), SplatErrors> {
+    match v.iter().find(|x| !(**x >= lo && **x <= hi)) {
+        Some(x) => Err(invalid(name, format!("{x} is outside [{lo}, {hi}]"))),
+        None => Ok(()),
+    }
+}
+
 ///////////
 // Enums //
 ///////////
@@ -127,6 +175,10 @@ pub enum Layout {
     /// `matrix.h5`, Cell Ranger v3 layout
     TenxH5,
 }
+
+//////////////////
+// OutputParams //
+//////////////////
 
 /// Where and how to write the output.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -309,50 +361,6 @@ impl Default for SplatParams {
             path_sigma_fac: None,
             output: OutputParams::default(),
         }
-    }
-}
-
-/// Expand a length-one vector to `n`, as splatter's `paramsExpander`, and
-/// check the length otherwise.
-///
-/// ### Params
-///
-/// * `v` - Vector to expand in place
-/// * `n` - Target length
-/// * `name` - Parameter name for the error
-///
-/// ### Returns
-///
-/// `Ok(())`, or an error when the length is neither 1 nor `n`.
-fn expand(v: &mut Vec<f64>, n: usize, name: &str) -> Result<(), SplatErrors> {
-    if v.len() == 1 && n > 1 {
-        *v = vec![v[0]; n];
-    }
-    if v.len() != n {
-        return Err(invalid(
-            name,
-            format!("length {} but {n} expected", v.len()),
-        ));
-    }
-    Ok(())
-}
-
-/// Check every value of a vector against a closed range.
-///
-/// ### Params
-///
-/// * `v` - Values
-/// * `lo` - Lower bound
-/// * `hi` - Upper bound
-/// * `name` - Parameter name for the error
-///
-/// ### Returns
-///
-/// `Ok(())`, or an error naming the first offending value.
-fn check_range(v: &[f64], lo: f64, hi: f64, name: &str) -> Result<(), SplatErrors> {
-    match v.iter().find(|x| !(**x >= lo && **x <= hi)) {
-        Some(x) => Err(invalid(name, format!("{x} is outside [{lo}, {hi}]"))),
-        None => Ok(()),
     }
 }
 

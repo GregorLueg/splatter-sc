@@ -15,6 +15,80 @@ use crate::errors::{SplatErrors, invalid};
 use crate::genes::{GeneTruth, Profiles};
 use crate::params::{DropoutType, Method, SplatParams};
 
+////////////
+// Consts //
+////////////
+
+/// Largest base mean whose count is drawn by negative binomial inversion.
+/// Inversion walks the pmf up from zero, so its cost grows with the mean,
+/// while gamma + Poisson costs roughly the same at any mean. Swept 10, 30,
+/// 100 at 20k genes, single thread: 10 and 30 tie, 100 is ~6% slower at
+/// splatter's default depth.
+const INVERSION_MAX_MEAN: f64 = 10.0;
+
+/////////////
+// Helpers //
+/////////////
+
+/// Logistic dropout midpoint and shape for one cell, or `None` without
+/// dropout.
+///
+/// ### Params
+///
+/// * `params` - Resolved parameters
+/// * `cells` - Cell metadata
+/// * `c` - Cell index
+///
+/// ### Returns
+///
+/// `(dropout.mid, dropout.shape)` for the cell.
+#[inline]
+fn dropout_for(params: &SplatParams, cells: &CellMeta, c: usize) -> Option<(f64, f64)> {
+    let i = match params.dropout_type {
+        DropoutType::None => return None,
+        DropoutType::Experiment => 0,
+        DropoutType::Batch => cells.batch[c] as usize,
+        DropoutType::Group => cells.group[c] as usize,
+        DropoutType::Cell => unreachable!("rejected by resolve()"),
+    };
+    Some((params.dropout_mid[i], params.dropout_shape[i]))
+}
+
+/// Negative binomial draw by inversion of the cdf with one uniform.
+///
+/// `Poisson(Gamma(shape = r, scale = m / r))` is exactly NB with mean `m` and
+/// size `r`: `P(0) = (r / (r + m))^r`, `P(k + 1) = P(k) (k + r) / (k + 1) q`
+/// with `q = m / (r + m)`. Most entries are zero and cost one `ln_1p`, one
+/// `exp` and the uniform, instead of a gamma and a Poisson draw.
+///
+/// ### Params
+///
+/// * `m` - Mean (`BaseCellMeans` entry)
+/// * `r` - Size, `1 / bcv^2`
+/// * `u` - Uniform on [0, 1)
+///
+/// ### Returns
+///
+/// The count.
+#[inline(always)]
+fn nb_invert(m: f64, r: f64, u: f64) -> u32 {
+    let q = m / (r + m);
+    let mut p = (-r * (m / r).ln_1p()).exp();
+    let mut cdf = p;
+    let mut k = 0u32;
+    // `p > 0` stops the walk if rounding leaves cdf just below a u near 1.
+    while u >= cdf && p > 0.0 {
+        p *= (k as f64 + r) / (k as f64 + 1.0) * q;
+        k += 1;
+        cdf += p;
+    }
+    k
+}
+
+//////////////
+// CellMeta //
+//////////////
+
 /// Per-cell ground truth.
 #[derive(Clone, Debug)]
 pub struct CellMeta {
@@ -90,6 +164,10 @@ impl CellMeta {
     }
 }
 
+///////////////
+// CellChunk //
+///////////////
+
 /// Simulated counts for a contiguous range of cells, cell-major CSR.
 #[derive(Clone, Debug, Default)]
 pub struct CellChunk {
@@ -115,29 +193,9 @@ impl CellChunk {
     }
 }
 
-/// Logistic dropout midpoint and shape for one cell, or `None` without
-/// dropout.
-///
-/// ### Params
-///
-/// * `params` - Resolved parameters
-/// * `cells` - Cell metadata
-/// * `c` - Cell index
-///
-/// ### Returns
-///
-/// `(dropout.mid, dropout.shape)` for the cell.
-#[inline]
-fn dropout_for(params: &SplatParams, cells: &CellMeta, c: usize) -> Option<(f64, f64)> {
-    let i = match params.dropout_type {
-        DropoutType::None => return None,
-        DropoutType::Experiment => 0,
-        DropoutType::Batch => cells.batch[c] as usize,
-        DropoutType::Group => cells.group[c] as usize,
-        DropoutType::Cell => unreachable!("rejected by resolve()"),
-    };
-    Some((params.dropout_mid[i], params.dropout_shape[i]))
-}
+//////////////////////
+// Count simulation //
+//////////////////////
 
 /// BCV of one entry, as in `splatSimBCVMeans`.
 ///
@@ -153,44 +211,6 @@ fn dropout_for(params: &SplatParams, cells: &CellMeta, c: usize) -> Option<(f64,
 #[inline(always)]
 pub fn bcv(bcv_common: f64, base: f64, chi_fac: f64) -> f64 {
     (bcv_common + 1.0 / base.sqrt()) * chi_fac
-}
-
-/// Largest base mean whose count is drawn by negative binomial inversion.
-/// Inversion walks the pmf up from zero, so its cost grows with the mean,
-/// while gamma + Poisson costs roughly the same at any mean. Swept 10, 30,
-/// 100 at 20k genes, single thread: 10 and 30 tie, 100 is ~6% slower at
-/// splatter's default depth.
-const INVERSION_MAX_MEAN: f64 = 10.0;
-
-/// Negative binomial draw by inversion of the cdf with one uniform.
-///
-/// `Poisson(Gamma(shape = r, scale = m / r))` is exactly NB with mean `m` and
-/// size `r`: `P(0) = (r / (r + m))^r`, `P(k + 1) = P(k) (k + r) / (k + 1) q`
-/// with `q = m / (r + m)`. Most entries are zero and cost one `ln_1p`, one
-/// `exp` and the uniform, instead of a gamma and a Poisson draw.
-///
-/// ### Params
-///
-/// * `m` - Mean (`BaseCellMeans` entry)
-/// * `r` - Size, `1 / bcv^2`
-/// * `u` - Uniform on [0, 1)
-///
-/// ### Returns
-///
-/// The count.
-#[inline(always)]
-fn nb_invert(m: f64, r: f64, u: f64) -> u32 {
-    let q = m / (r + m);
-    let mut p = (-r * (m / r).ln_1p()).exp();
-    let mut cdf = p;
-    let mut k = 0u32;
-    // `p > 0` stops the walk if rounding leaves cdf just below a u near 1.
-    while u >= cdf && p > 0.0 {
-        p *= (k as f64 + r) / (k as f64 + 1.0) * q;
-        k += 1;
-        cdf += p;
-    }
-    k
 }
 
 /// Simulate counts for cells `start..end`.

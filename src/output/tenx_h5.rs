@@ -15,11 +15,19 @@ use crate::errors::{SplatErrors, invalid};
 use crate::output::tables::{cell_name, gene_name};
 use crate::params::SplatParams;
 
+////////////
+// Consts //
+////////////
+
 /// Fixed string width; generated names are far shorter.
 type Name = FixedAscii<31>;
 
 /// Genome label in `features/genome`.
 const GENOME: &str = "sim";
+
+/////////////
+// Helpers //
+/////////////
 
 /// Fixed-width ASCII names.
 ///
@@ -35,6 +43,10 @@ fn names(values: impl Iterator<Item = String>) -> Result<Vec<Name>, SplatErrors>
         .map(|s| Name::from_ascii(&s).map_err(|e| invalid("name", format!("{s}: {e}"))))
         .collect()
 }
+
+////////////////
+// TenxH5Sink //
+////////////////
 
 /// Writer for the 10x h5 layout.
 pub struct TenxH5Sink {

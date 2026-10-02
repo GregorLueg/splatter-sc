@@ -39,6 +39,10 @@ use crate::genes::{GeneTruth, Profiles};
 use crate::output::{encode, write_gz};
 use crate::params::{Method, SplatParams};
 
+////////////
+// Consts //
+////////////
+
 /// Cells per chunk. Each chunk has its own RNG stream, so this fixes the
 /// output for a seed; changing it changes every simulated count. Memory in
 /// flight is about `2 * threads * CHUNKS_PER_THREAD * CELL_CHUNK` cells of
@@ -60,6 +64,10 @@ const STREAM_CELLS: u64 = 1;
 /// RNG stream of chunk 0; chunk `i` uses `STREAM_CHUNK0 + i`.
 const STREAM_CHUNK0: u64 = 2;
 
+/////////////
+// Helpers //
+/////////////
+
 /// RNG for one stream of a seed.
 ///
 /// ### Params
@@ -75,6 +83,10 @@ fn stream_rng(seed: u64, stream: u64) -> ChaCha8Rng {
     rng.set_stream(stream);
     rng
 }
+
+////////////////
+// Simulation //
+////////////////
 
 /// Everything drawn before the counts: gene truth, profiles, cell metadata.
 pub struct Simulation {
@@ -166,6 +178,10 @@ impl Simulation {
     }
 }
 
+////////////////
+// RunSummary //
+////////////////
+
 /// Timings and size of a finished run.
 #[derive(Clone, Debug)]
 pub struct RunSummary {
@@ -180,6 +196,10 @@ pub struct RunSummary {
     /// Total nonzeros
     pub nnz: u64,
 }
+
+/////////
+// Run //
+/////////
 
 /// Run a full simulation and write all requested layouts plus the truth
 /// sidecars (`params_used.json`, `cells_truth.tsv.gz`, `genes_truth.tsv.gz`).

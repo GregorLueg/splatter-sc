@@ -11,6 +11,10 @@ use crate::cells::CellChunk;
 use crate::errors::SplatErrors;
 use crate::params::SplatParams;
 
+/////////////////
+// TenxMtxSink //
+/////////////////
+
 /// Writer for the 10x mtx layout.
 pub struct TenxMtxSink {
     /// Streaming `matrix.mtx.gz` body, a sequence of gzip members

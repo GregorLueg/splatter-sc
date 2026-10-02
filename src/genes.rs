@@ -12,70 +12,9 @@ use rayon::prelude::*;
 use crate::errors::{SplatErrors, invalid};
 use crate::params::{Method, SplatParams};
 
-/// True per-gene parameters of one simulation. Written out as the gene
-/// ground truth.
-#[derive(Clone, Debug)]
-pub struct GeneTruth {
-    /// `BaseGeneMean`: gamma draw before outliers
-    pub base_gene_mean: Vec<f64>,
-    /// `OutlierFactor`: 1 for non-outliers
-    pub outlier_factor: Vec<f64>,
-    /// `GeneMean`: base mean with outliers replaced by median * factor
-    pub gene_mean: Vec<f64>,
-    /// `BatchFacBatch<b>`, one vector per batch; empty with a single batch,
-    /// as splatter only draws them for `nBatches > 1`
-    pub batch_fac: Vec<Vec<f64>>,
-    /// `DEFacGroup<k>`, one vector per group; empty in single mode
-    pub de_fac: Vec<Vec<f64>>,
-    /// `sqrt(bcv.df / chisq[g])`, one chi-squared draw per gene shared by all
-    /// cells (splatter recycles `rchisq(nGenes)` down the columns); all ones
-    /// for infinite `bcv.df`
-    pub bcv_chi_fac: Vec<f64>,
-}
-
-/// Port of splatter's `getLNormFactors`.
-///
-/// Each factor is selected with `sel_prob`. A selected factor is a log-normal
-/// draw, inverted with probability `neg_prob`; a draw below one has its
-/// direction flipped first, so `neg_prob` really is the share of factors
-/// below one. Unselected factors are 1.
-///
-/// ### Params
-///
-/// * `rng` - Random number generator
-/// * `n` - Number of factors
-/// * `sel_prob` - Probability a factor differs from one
-/// * `neg_prob` - Probability a selected factor is below one
-/// * `loc` - Log-normal location
-/// * `scale` - Log-normal scale
-///
-/// ### Returns
-///
-/// `n` factors.
-pub fn get_lnorm_factors<R: Rng>(
-    rng: &mut R,
-    n: usize,
-    sel_prob: f64,
-    neg_prob: f64,
-    loc: f64,
-    scale: f64,
-) -> Result<Vec<f64>, SplatErrors> {
-    let sel = Bernoulli::new(sel_prob).map_err(|e| invalid("sel_prob", e.to_string()))?;
-    let neg = Bernoulli::new(neg_prob).map_err(|e| invalid("neg_prob", e.to_string()))?;
-    let lnorm = LogNormal::new(loc, scale).map_err(|e| invalid("fac.scale", e.to_string()))?;
-
-    Ok((0..n)
-        .map(|_| {
-            if !sel.sample(rng) {
-                return 1.0;
-            }
-            let down = neg.sample(rng);
-            let f: f64 = lnorm.sample(rng);
-            // `dir.selected[facs.selected < 1] <- -dir`: flip, then invert.
-            if down != (f < 1.0) { 1.0 / f } else { f }
-        })
-        .collect())
-}
+/////////////
+// Helpers //
+/////////////
 
 /// Median as R computes it (mean of the two middle values for even `n`).
 ///
@@ -95,6 +34,31 @@ fn median(x: &[f64]) -> f64 {
     } else {
         0.5 * (v[n / 2 - 1] + v[n / 2])
     }
+}
+
+///////////////
+// GeneTruth //
+///////////////
+
+/// True per-gene parameters of one simulation. Written out as the gene
+/// ground truth.
+#[derive(Clone, Debug)]
+pub struct GeneTruth {
+    /// `BaseGeneMean`: gamma draw before outliers
+    pub base_gene_mean: Vec<f64>,
+    /// `OutlierFactor`: 1 for non-outliers
+    pub outlier_factor: Vec<f64>,
+    /// `GeneMean`: base mean with outliers replaced by median * factor
+    pub gene_mean: Vec<f64>,
+    /// `BatchFacBatch<b>`, one vector per batch; empty with a single batch,
+    /// as splatter only draws them for `nBatches > 1`
+    pub batch_fac: Vec<Vec<f64>>,
+    /// `DEFacGroup<k>`, one vector per group; empty in single mode
+    pub de_fac: Vec<Vec<f64>>,
+    /// `sqrt(bcv.df / chisq[g])`, one chi-squared draw per gene shared by all
+    /// cells (splatter recycles `rchisq(nGenes)` down the columns); all ones
+    /// for infinite `bcv.df`
+    pub bcv_chi_fac: Vec<f64>,
 }
 
 impl GeneTruth {
@@ -196,6 +160,10 @@ impl GeneTruth {
     }
 }
 
+//////////////
+// Profiles //
+//////////////
+
 /// Normalised expression profiles, one per (batch, group) pair.
 ///
 /// In splatter, `BaseCellMeans[, c] = lib[c] * m / sum(m)` with
@@ -260,6 +228,54 @@ impl Profiles {
         let i = batch * self.n_groups + group;
         &self.data[i * self.n_genes..(i + 1) * self.n_genes]
     }
+}
+
+///////////////////////
+// Factor simulation //
+///////////////////////
+
+/// Port of splatter's `getLNormFactors`.
+///
+/// Each factor is selected with `sel_prob`. A selected factor is a log-normal
+/// draw, inverted with probability `neg_prob`; a draw below one has its
+/// direction flipped first, so `neg_prob` really is the share of factors
+/// below one. Unselected factors are 1.
+///
+/// ### Params
+///
+/// * `rng` - Random number generator
+/// * `n` - Number of factors
+/// * `sel_prob` - Probability a factor differs from one
+/// * `neg_prob` - Probability a selected factor is below one
+/// * `loc` - Log-normal location
+/// * `scale` - Log-normal scale
+///
+/// ### Returns
+///
+/// `n` factors.
+pub fn get_lnorm_factors<R: Rng>(
+    rng: &mut R,
+    n: usize,
+    sel_prob: f64,
+    neg_prob: f64,
+    loc: f64,
+    scale: f64,
+) -> Result<Vec<f64>, SplatErrors> {
+    let sel = Bernoulli::new(sel_prob).map_err(|e| invalid("sel_prob", e.to_string()))?;
+    let neg = Bernoulli::new(neg_prob).map_err(|e| invalid("neg_prob", e.to_string()))?;
+    let lnorm = LogNormal::new(loc, scale).map_err(|e| invalid("fac.scale", e.to_string()))?;
+
+    Ok((0..n)
+        .map(|_| {
+            if !sel.sample(rng) {
+                return 1.0;
+            }
+            let down = neg.sample(rng);
+            let f: f64 = lnorm.sample(rng);
+            // `dir.selected[facs.selected < 1] <- -dir`: flip, then invert.
+            if down != (f < 1.0) { 1.0 / f } else { f }
+        })
+        .collect())
 }
 
 ///////////

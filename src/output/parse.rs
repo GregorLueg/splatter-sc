@@ -13,8 +13,16 @@ use crate::errors::SplatErrors;
 use crate::output::tables::cell_table;
 use crate::params::SplatParams;
 
+////////////
+// Consts //
+////////////
+
 /// Genome label in `all_genes.csv`.
 const GENOME: &str = "sim";
+
+///////////////
+// ParseSink //
+///////////////
 
 /// Writer for the Parse layout.
 pub struct ParseSink {

@@ -22,8 +22,66 @@ use crate::cells::CellChunk;
 use crate::errors::SplatErrors;
 use crate::params::Layout;
 
+////////////
+// Consts //
+////////////
+
 /// Size of the `BufWriter` in front of every output file.
 const WRITE_BUF: usize = 1 << 20;
+
+/////////////
+// Helpers //
+/////////////
+
+/// Compress bytes into one gzip member. Members concatenate into a valid
+/// gzip stream, which is what lets chunks compress in parallel.
+///
+/// ### Params
+///
+/// * `bytes` - Uncompressed bytes
+///
+/// ### Returns
+///
+/// One complete gzip member.
+pub(crate) fn gzip(bytes: &[u8]) -> Result<Vec<u8>, SplatErrors> {
+    let mut enc = GzEncoder::new(Vec::with_capacity(bytes.len() / 3), Compression::default());
+    enc.write_all(bytes)?;
+    Ok(enc.finish()?)
+}
+
+/// Create a buffered file.
+///
+/// ### Params
+///
+/// * `path` - File to create or truncate
+///
+/// ### Returns
+///
+/// The writer.
+pub(crate) fn create(path: &Path) -> Result<BufWriter<File>, SplatErrors> {
+    Ok(BufWriter::with_capacity(WRITE_BUF, File::create(path)?))
+}
+
+/// Write bytes to a new file as one gzip member.
+///
+/// ### Params
+///
+/// * `path` - File to create
+/// * `bytes` - Uncompressed content
+///
+/// ### Returns
+///
+/// `Ok(())` or an IO error.
+pub(crate) fn write_gz(path: &Path, bytes: &[u8]) -> Result<(), SplatErrors> {
+    let mut f = create(path)?;
+    f.write_all(&gzip(bytes)?)?;
+    f.flush()?;
+    Ok(())
+}
+
+//////////
+// Sink //
+//////////
 
 /// A destination for simulated chunks.
 pub trait Sink: Send {
@@ -46,6 +104,10 @@ pub trait Sink: Send {
     /// `Ok(())` or an IO error.
     fn finish(self: Box<Self>) -> Result<(), SplatErrors>;
 }
+
+//////////////
+// Dispatch //
+//////////////
 
 /// Encode a chunk for a layout on a worker thread.
 ///
@@ -93,50 +155,4 @@ pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
             })
         })
         .collect()
-}
-
-/// Compress bytes into one gzip member. Members concatenate into a valid
-/// gzip stream, which is what lets chunks compress in parallel.
-///
-/// ### Params
-///
-/// * `bytes` - Uncompressed bytes
-///
-/// ### Returns
-///
-/// One complete gzip member.
-pub(crate) fn gzip(bytes: &[u8]) -> Result<Vec<u8>, SplatErrors> {
-    let mut enc = GzEncoder::new(Vec::with_capacity(bytes.len() / 3), Compression::default());
-    enc.write_all(bytes)?;
-    Ok(enc.finish()?)
-}
-
-/// Create a buffered file.
-///
-/// ### Params
-///
-/// * `path` - File to create or truncate
-///
-/// ### Returns
-///
-/// The writer.
-pub(crate) fn create(path: &Path) -> Result<BufWriter<File>, SplatErrors> {
-    Ok(BufWriter::with_capacity(WRITE_BUF, File::create(path)?))
-}
-
-/// Write bytes to a new file as one gzip member.
-///
-/// ### Params
-///
-/// * `path` - File to create
-/// * `bytes` - Uncompressed content
-///
-/// ### Returns
-///
-/// `Ok(())` or an IO error.
-pub(crate) fn write_gz(path: &Path, bytes: &[u8]) -> Result<(), SplatErrors> {
-    let mut f = create(path)?;
-    f.write_all(&gzip(bytes)?)?;
-    f.flush()?;
-    Ok(())
 }

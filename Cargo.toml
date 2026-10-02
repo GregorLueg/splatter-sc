@@ -6,6 +6,7 @@ authors = ["Gregor Lueg <gregorlueg@me.com>"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/GregorLueg/splatter-sc"
 description = "A streaming Rust port of the Splat single-cell RNA-seq simulator from splatter."
+include = ["src/**/*", "Cargo.toml", "Cargo.lock", "LICENSE", "README.md"]
 
 [features]
 ## Compile the bundled HDF5 C library from source instead of linking an

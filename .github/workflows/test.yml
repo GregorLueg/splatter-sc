@@ -1,0 +1,22 @@
+name: Test the package
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: GregorLueg/personal-actions/.github/workflows/rust-test.yml@v1
+    with:
+      cpu-args: '--release --features hdf5-static'
+      # No GPU lane. An empty gpu-args skips the job entirely.
+      gpu-args: ''
+      # hdf5-metno-src on Windows is untested here; turn on once it builds.
+      windows: false
+    secrets: inherit

@@ -155,12 +155,56 @@ pub fn bcv(bcv_common: f64, base: f64, chi_fac: f64) -> f64 {
     (bcv_common + 1.0 / base.sqrt()) * chi_fac
 }
 
+/// Largest base mean whose count is drawn by negative binomial inversion.
+/// Inversion walks the pmf up from zero, so its cost grows with the mean,
+/// while gamma + Poisson costs roughly the same at any mean. Swept 10, 30,
+/// 100 at 20k genes, single thread: 10 and 30 tie, 100 is ~6% slower at
+/// splatter's default depth.
+const INVERSION_MAX_MEAN: f64 = 10.0;
+
+/// Negative binomial draw by inversion of the cdf with one uniform.
+///
+/// `Poisson(Gamma(shape = r, scale = m / r))` is exactly NB with mean `m` and
+/// size `r`: `P(0) = (r / (r + m))^r`, `P(k + 1) = P(k) (k + r) / (k + 1) q`
+/// with `q = m / (r + m)`. Most entries are zero and cost one `ln_1p`, one
+/// `exp` and the uniform, instead of a gamma and a Poisson draw.
+///
+/// ### Params
+///
+/// * `m` - Mean (`BaseCellMeans` entry)
+/// * `r` - Size, `1 / bcv^2`
+/// * `u` - Uniform on [0, 1)
+///
+/// ### Returns
+///
+/// The count.
+#[inline(always)]
+fn nb_invert(m: f64, r: f64, u: f64) -> u32 {
+    let q = m / (r + m);
+    let mut p = (-r * (m / r).ln_1p()).exp();
+    let mut cdf = p;
+    let mut k = 0u32;
+    // `p > 0` stops the walk if rounding leaves cdf just below a u near 1.
+    while u >= cdf && p > 0.0 {
+        p *= (k as f64 + r) / (k as f64 + 1.0) * q;
+        k += 1;
+        cdf += p;
+    }
+    k
+}
+
 /// Simulate counts for cells `start..end`.
 ///
-/// One fused pass per cell over all genes: base mean, BCV, gamma cell mean,
-/// Poisson count, optional dropout. Only nonzeros are stored. The dropout
-/// Bernoulli is only drawn for nonzero counts, since a dropped zero stays
-/// zero; that changes the stream but not the distribution.
+/// One fused pass per cell over all genes: base mean, BCV, count, optional
+/// dropout. Only nonzeros are stored.
+///
+/// The count is splatter's gamma cell mean followed by a Poisson draw. For
+/// base means up to [`INVERSION_MAX_MEAN`] the pair is replaced by the
+/// identical negative binomial, drawn by [`nb_invert`]. Dropout needs the
+/// cell mean, which is then drawn from its posterior given the count,
+/// `Gamma(r + k, scale = m / (r + m))`; the joint law of (cell mean, count)
+/// is unchanged. Dropout is only applied to nonzero counts, since a dropped
+/// zero stays zero. Both change the random stream, not the distribution.
 ///
 /// ### Params
 ///
@@ -202,20 +246,35 @@ pub fn simulate_chunk<R: Rng>(
                 continue;
             }
             let b = bcv(params.bcv_common, base, chi);
-            let b2 = b * b;
-            let mu: f64 = Gamma::new(1.0 / b2, base * b2)
-                .map_err(|e| invalid("bcv", e.to_string()))?
-                .sample(rng);
-            // Tiny shapes underflow to 0; Poisson rejects lambda = 0.
-            if !(mu > 0.0) {
-                continue;
-            }
-            let count: f64 = Poisson::new(mu)
-                .map_err(|e| invalid("cell mean", e.to_string()))?
-                .sample(rng);
-            if count == 0.0 {
-                continue;
-            }
+            let r = 1.0 / (b * b);
+            let (count, mu) = if base <= INVERSION_MAX_MEAN {
+                let k = nb_invert(base, r, rng.random());
+                if k == 0 {
+                    continue;
+                }
+                let mu = match dropout {
+                    Some(_) => Gamma::new(r + k as f64, base / (r + base))
+                        .map_err(|e| invalid("bcv", e.to_string()))?
+                        .sample(rng),
+                    None => f64::NAN,
+                };
+                (k, mu)
+            } else {
+                let mu: f64 = Gamma::new(r, base / r)
+                    .map_err(|e| invalid("bcv", e.to_string()))?
+                    .sample(rng);
+                // Tiny shapes underflow to 0; Poisson rejects lambda = 0.
+                if !(mu > 0.0) {
+                    continue;
+                }
+                let k: f64 = Poisson::new(mu)
+                    .map_err(|e| invalid("cell mean", e.to_string()))?
+                    .sample(rng);
+                if k == 0.0 {
+                    continue;
+                }
+                (k as u32, mu)
+            };
             if let Some((mid, shape)) = dropout {
                 let p_drop = 1.0 / (1.0 + (-shape * (mu.ln() - mid)).exp());
                 if rng.random::<f64>() < p_drop {
@@ -223,7 +282,7 @@ pub fn simulate_chunk<R: Rng>(
                 }
             }
             chunk.indices.push(g as u32);
-            chunk.counts.push(count as u32);
+            chunk.counts.push(count);
         }
         chunk.indptr.push(chunk.indices.len());
     }
@@ -239,6 +298,33 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
+
+    #[test]
+    fn test_nb_invert_matches_gamma_poisson_moments() {
+        // NB(mean m, size r): P(0) = (r / (r + m))^r, var = m + m^2 / r.
+        let mut rng = ChaCha8Rng::seed_from_u64(5);
+        let n = 400_000;
+        for &(m, r) in &[(0.01, 0.5), (0.3, 2.0), (4.0, 10.0), (25.0, 3.0)] {
+            let x: Vec<f64> = (0..n)
+                .map(|_| nb_invert(m, r, rng.random()) as f64)
+                .collect();
+            let mean = x.iter().sum::<f64>() / n as f64;
+            let var = x.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+            let p0 = x.iter().filter(|&&v| v == 0.0).count() as f64 / n as f64;
+            let (var_t, p0_t) = (m + m * m / r, (r / (r + m)).powf(r));
+            let se_mean = (var_t / n as f64).sqrt();
+            assert!((mean - m).abs() < 5.0 * se_mean, "m={m} r={r}: mean {mean}");
+            assert!(
+                (var / var_t - 1.0).abs() < 0.05,
+                "m={m} r={r}: var {var} vs {var_t}"
+            );
+            let se_p0 = (p0_t * (1.0 - p0_t) / n as f64).sqrt();
+            assert!(
+                (p0 - p0_t).abs() < 5.0 * se_p0,
+                "m={m} r={r}: P0 {p0} vs {p0_t}"
+            );
+        }
+    }
 
     #[test]
     fn test_batches_are_contiguous_blocks() {

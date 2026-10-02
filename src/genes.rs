@@ -307,6 +307,32 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_rm_effect_keeps_stream() {
+        // splatter still draws the batch factors before discarding them, so
+        // everything drawn afterwards must not move.
+        let params = |rm| {
+            SplatParams {
+                n_genes: 500,
+                batch_cells: vec![10, 10],
+                batch_rm_effect: rm,
+                group_prob: vec![0.5, 0.5],
+                method: Method::Groups,
+                ..Default::default()
+            }
+            .resolve()
+            .unwrap()
+        };
+        let keep = GeneTruth::simulate(&params(false), &mut ChaCha8Rng::seed_from_u64(4)).unwrap();
+        let rm = GeneTruth::simulate(&params(true), &mut ChaCha8Rng::seed_from_u64(4)).unwrap();
+        assert_eq!(rm.batch_fac.len(), 2);
+        assert!(rm.batch_fac.iter().flatten().all(|&x| x == 1.0));
+        assert!(keep.batch_fac.iter().flatten().any(|&x| x != 1.0));
+        assert_eq!(rm.gene_mean, keep.gene_mean);
+        assert_eq!(rm.de_fac, keep.de_fac);
+        assert_eq!(rm.bcv_chi_fac, keep.bcv_chi_fac);
+    }
+
+    #[test]
     fn test_median_even_and_odd() {
         assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), 2.5);

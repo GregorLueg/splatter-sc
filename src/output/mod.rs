@@ -4,6 +4,7 @@
 
 mod h5;
 pub mod h5ad;
+mod mtx;
 pub mod parse;
 pub mod tables;
 pub mod tenx_h5;
@@ -11,20 +12,18 @@ pub mod tenx_mtx;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
+use crate::Simulation;
 use crate::cells::CellChunk;
 use crate::errors::SplatErrors;
 use crate::params::Layout;
 
 /// Size of the `BufWriter` in front of every output file.
 const WRITE_BUF: usize = 1 << 20;
-
-/// MatrixMarket banner shared by both mtx layouts.
-pub(crate) const MTX_BANNER: &str = "%%MatrixMarket matrix coordinate integer general\n";
 
 /// A destination for simulated chunks.
 pub trait Sink: Send {
@@ -62,10 +61,38 @@ pub trait Sink: Send {
 /// CSR directly.
 pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
     match layout {
-        Layout::Parse => Ok(parse::encode(chunk)),
-        Layout::TenxMtx => gzip(&tenx_mtx::encode(chunk)),
+        Layout::Parse => Ok(mtx::encode_lines(chunk, true)),
+        Layout::TenxMtx => gzip(&mtx::encode_lines(chunk, false)),
         Layout::H5ad | Layout::TenxH5 => Ok(Vec::new()),
     }
+}
+
+/// Open the sink of every requested layout.
+///
+/// ### Params
+///
+/// * `sim` - The simulation
+///
+/// ### Returns
+///
+/// One sink per layout, in `output.layouts` order.
+pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
+    let (p, dir) = (&sim.params, &sim.params.output.dir);
+    let deflate = p.output.h5_compression;
+    p.output
+        .layouts
+        .iter()
+        .map(|l| -> Result<Box<dyn Sink>, SplatErrors> {
+            Ok(match l {
+                Layout::Parse => Box::new(parse::ParseSink::new(dir, p, &sim.cells)?),
+                Layout::TenxMtx => Box::new(tenx_mtx::TenxMtxSink::new(dir, p)?),
+                Layout::H5ad => Box::new(h5ad::H5adSink::new(
+                    dir, p, &sim.cells, &sim.genes, deflate,
+                )?),
+                Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(dir, p, deflate)?),
+            })
+        })
+        .collect()
 }
 
 /// Compress bytes into one gzip member. Members concatenate into a valid
@@ -112,80 +139,4 @@ pub(crate) fn write_gz(path: &Path, bytes: &[u8]) -> Result<(), SplatErrors> {
     f.write_all(&gzip(bytes)?)?;
     f.flush()?;
     Ok(())
-}
-
-/// The body of a MatrixMarket file whose header is only known at the end.
-///
-/// The header carries the nonzero count, so the body streams into a
-/// temporary file next to the target, and [`MtxBody::finish`] writes the
-/// header and copies the body behind it.
-pub(crate) struct MtxBody {
-    /// Final file path
-    path: PathBuf,
-    /// Temporary body path
-    tmp: PathBuf,
-    /// Writer on the temporary body
-    body: BufWriter<File>,
-    /// Nonzeros written so far
-    pub nnz: u64,
-}
-
-impl MtxBody {
-    /// Open the temporary body for `path`.
-    ///
-    /// ### Params
-    ///
-    /// * `path` - Final file path
-    ///
-    /// ### Returns
-    ///
-    /// The body writer.
-    pub fn new(path: PathBuf) -> Result<Self, SplatErrors> {
-        let mut tmp = path.clone().into_os_string();
-        tmp.push(".body.tmp");
-        let tmp = PathBuf::from(tmp);
-        Ok(Self {
-            body: create(&tmp)?,
-            path,
-            tmp,
-            nnz: 0,
-        })
-    }
-
-    /// Append encoded entries.
-    ///
-    /// ### Params
-    ///
-    /// * `bytes` - Encoded entries
-    /// * `nnz` - Number of entries in `bytes`
-    ///
-    /// ### Returns
-    ///
-    /// `Ok(())` or an IO error.
-    pub fn append(&mut self, bytes: &[u8], nnz: usize) -> Result<(), SplatErrors> {
-        self.body.write_all(bytes)?;
-        self.nnz += nnz as u64;
-        Ok(())
-    }
-
-    /// Write `header` then the body to the final path, and remove the body.
-    ///
-    /// ### Params
-    ///
-    /// * `header` - Already encoded header bytes
-    ///
-    /// ### Returns
-    ///
-    /// `Ok(())` or an IO error.
-    pub fn finish(self, header: &[u8]) -> Result<(), SplatErrors> {
-        let mut body = self.body.into_inner().map_err(|e| e.into_error())?;
-        body.flush()?;
-        drop(body);
-        let mut out = create(&self.path)?;
-        out.write_all(header)?;
-        std::io::copy(&mut File::open(&self.tmp)?, &mut out)?;
-        out.flush()?;
-        std::fs::remove_file(&self.tmp)?;
-        Ok(())
-    }
 }

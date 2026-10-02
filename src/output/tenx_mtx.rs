@@ -5,7 +5,8 @@
 use std::io::Write;
 use std::path::Path;
 
-use super::{MTX_BANNER, MtxBody, Sink, gzip, write_gz};
+use super::mtx::{MTX_BANNER, MtxBody};
+use super::{Sink, gzip, write_gz};
 use crate::cells::CellChunk;
 use crate::errors::SplatErrors;
 use crate::params::SplatParams;
@@ -53,26 +54,6 @@ impl TenxMtxSink {
             n_genes: params.n_genes,
         })
     }
-}
-
-/// MatrixMarket lines `gene cell count`, 1-based.
-///
-/// ### Params
-///
-/// * `chunk` - Counts in cell-major CSR
-///
-/// ### Returns
-///
-/// The encoded, uncompressed lines.
-pub fn encode(chunk: &CellChunk) -> Vec<u8> {
-    let mut out = Vec::with_capacity(chunk.counts.len() * 16);
-    for (i, w) in chunk.indptr.windows(2).enumerate() {
-        let c = chunk.start + i + 1;
-        for j in w[0]..w[1] {
-            writeln!(out, "{} {c} {}", chunk.indices[j] + 1, chunk.counts[j]).unwrap();
-        }
-    }
-    out
 }
 
 impl Sink for TenxMtxSink {

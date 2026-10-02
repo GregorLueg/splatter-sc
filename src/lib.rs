@@ -36,8 +36,8 @@ use rayon::prelude::*;
 use crate::cells::{CellChunk, CellMeta, simulate_chunk};
 use crate::errors::SplatErrors;
 use crate::genes::{GeneTruth, Profiles};
-use crate::output::{Sink, encode, write_gz};
-use crate::params::{Layout, Method, SplatParams};
+use crate::output::{encode, write_gz};
+use crate::params::{Method, SplatParams};
 
 /// Cells per chunk. Each chunk has its own RNG stream, so this fixes the
 /// output for a seed; changing it changes every simulated count. Memory in
@@ -181,34 +181,6 @@ pub struct RunSummary {
     pub nnz: u64,
 }
 
-/// Open the sink of every requested layout.
-///
-/// ### Params
-///
-/// * `sim` - The simulation
-///
-/// ### Returns
-///
-/// One sink per layout, in `output.layouts` order.
-fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
-    let (p, dir) = (&sim.params, &sim.params.output.dir);
-    let deflate = p.output.h5_compression;
-    p.output
-        .layouts
-        .iter()
-        .map(|l| -> Result<Box<dyn Sink>, SplatErrors> {
-            Ok(match l {
-                Layout::Parse => Box::new(output::parse::ParseSink::new(dir, p, &sim.cells)?),
-                Layout::TenxMtx => Box::new(output::tenx_mtx::TenxMtxSink::new(dir, p)?),
-                Layout::H5ad => Box::new(output::h5ad::H5adSink::new(
-                    dir, p, &sim.cells, &sim.genes, deflate,
-                )?),
-                Layout::TenxH5 => Box::new(output::tenx_h5::TenxH5Sink::new(dir, p, deflate)?),
-            })
-        })
-        .collect()
-}
-
 /// Run a full simulation and write all requested layouts plus the truth
 /// sidecars (`params_used.json`, `cells_truth.tsv.gz`, `genes_truth.tsv.gz`).
 ///
@@ -240,7 +212,7 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
         &dir.join("genes_truth.tsv.gz"),
         &output::tables::gene_table(&sim.genes, '\t'),
     )?;
-    let sinks = open_sinks(&sim)?;
+    let sinks = output::open_sinks(&sim)?;
     let setup = t0.elapsed();
 
     let layouts = sim.params.output.layouts.clone();

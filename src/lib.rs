@@ -40,13 +40,16 @@ use crate::output::{Sink, encode, write_gz};
 use crate::params::{Layout, Method, SplatParams};
 
 /// Cells per chunk. Each chunk has its own RNG stream, so this fixes the
-/// output for a seed; changing it changes every simulated count. 4096 cells
-/// keeps a chunk's CSR in the low MB at typical sparsity.
-pub const CELL_CHUNK: usize = 4096;
+/// output for a seed; changing it changes every simulated count. Memory in
+/// flight is about `2 * threads * CHUNKS_PER_THREAD * CELL_CHUNK` cells of
+/// CSR plus encoded text, ~20 bytes per nonzero. At splatter's default
+/// `lib.loc = 11` (~8k nonzeros per cell over 20k genes) one 256-cell chunk
+/// is ~45 MB.
+pub const CELL_CHUNK: usize = 256;
 
-/// Chunks per thread in one window. Bounds memory to two windows (one being
-/// simulated, one being written) while keeping all threads busy.
-const CHUNKS_PER_THREAD: usize = 4;
+/// Chunks per thread in one window. Two windows are alive at most, one
+/// being simulated and one being written.
+const CHUNKS_PER_THREAD: usize = 2;
 
 /// RNG stream of the per-gene draws.
 const STREAM_GENES: u64 = 0;

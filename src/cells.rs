@@ -21,9 +21,7 @@ use crate::params::{DropoutType, Method, SplatParams};
 
 /// Largest base mean whose count is drawn by negative binomial inversion.
 /// Inversion walks the pmf up from zero, so its cost grows with the mean,
-/// while gamma + Poisson costs roughly the same at any mean. Swept 10, 30,
-/// 100 at 20k genes, single thread: 10 and 30 tie, 100 is ~6% slower at
-/// splatter's default depth.
+/// while gamma + Poisson costs roughly the same at any mean.
 const INVERSION_MAX_MEAN: f64 = 10.0;
 
 /////////////

@@ -118,7 +118,7 @@ The test suite checks this against fixtures generated with splatter 1.37.1:
 Run them with `cargo test --release`. The large fixtures sit behind
 `--features large-scale-tests`.
 
-## What's not ported
+## What's not ported (yet)
 
 - `method = "paths"` (trajectories).
 - `dropout.type = "cell"`.

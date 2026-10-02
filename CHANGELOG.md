@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 First release. A fresh Rust port of splatter's Splat simulator, shipped as the
 `splatter-sc` binary.
@@ -31,6 +31,6 @@ First release. A fresh Rust port of splatter's Splat simulator, shipped as the
 - Ground truth sidecars on every run: `params_used.json`,
   `cells_truth.tsv.gz`, `genes_truth.tsv.gz`.
 
-### Not ported
+### Not ported (yet)
 
 - `method = "paths"` and `dropout.type = "cell"`; both are rejected.

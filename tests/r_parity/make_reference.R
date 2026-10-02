@@ -53,11 +53,27 @@ settings <- list(
   lib_norm = list(
     method = "single",
     args = list(lib.norm = TRUE, lib.loc = 20000, lib.scale = 8000)
-  )
+  ),
+  dropout_batch = list(
+    method = "single",
+    args = list(
+      dropout.mid = c(0, 1.5), dropout.shape = c(-1, -0.5), dropout.type = "batch"
+    ),
+    batch_frac = c(0.4, 0.6)
+  ),
+  dropout_group = list(
+    method = "groups",
+    args = list(
+      group.prob = c(0.4, 0.6), dropout.mid = c(1.5, 0),
+      dropout.shape = c(-0.5, -1), dropout.type = "group"
+    )
+  ),
+  bcv_inf = list(method = "single", args = list(bcv.df = Inf))
 )
 
 sizes <- list(
   small = list(genes = 100, cells = 200, seed = 1),
+  medium = list(genes = 500, cells = 1000, seed = 3),
   large = list(genes = 2000, cells = 5000, seed = 2)
 )
 
@@ -71,7 +87,7 @@ for (name in names(settings)) {
       list(nGenes = sz$genes, batchCells = batch_cells, seed = sz$seed),
       s$args
     ))
-    sim <- splatSimulate(params, method = s$method, verbose = FALSE)
+    sim <- suppressWarnings(splatSimulate(params, method = s$method, verbose = FALSE))
 
     out <- file.path(out_root, name, size_name)
     dir.create(out, recursive = TRUE, showWarnings = FALSE)

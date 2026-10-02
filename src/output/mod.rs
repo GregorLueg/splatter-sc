@@ -2,8 +2,11 @@
 //! order on one writer thread. Text encoding of a chunk happens beforehand
 //! on the worker threads via [`encode`], so the writer only appends bytes.
 
+mod h5;
+pub mod h5ad;
 pub mod parse;
 pub mod tables;
+pub mod tenx_h5;
 pub mod tenx_mtx;
 
 use std::fs::File;
@@ -55,11 +58,13 @@ pub trait Sink: Send {
 /// ### Returns
 ///
 /// The bytes the layout's sink appends: plain MatrixMarket lines for Parse,
-/// one gzip member for 10x mtx.
+/// one gzip member for 10x mtx, nothing for the HDF5 layouts, which take the
+/// CSR directly.
 pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
     match layout {
         Layout::Parse => Ok(parse::encode(chunk)),
         Layout::TenxMtx => gzip(&tenx_mtx::encode(chunk)),
+        Layout::H5ad | Layout::TenxH5 => Ok(Vec::new()),
     }
 }
 

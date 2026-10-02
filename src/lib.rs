@@ -191,17 +191,19 @@ pub struct RunSummary {
 ///
 /// One sink per layout, in `output.layouts` order.
 fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
-    let dir = &sim.params.output.dir;
-    sim.params
-        .output
+    let (p, dir) = (&sim.params, &sim.params.output.dir);
+    let deflate = p.output.h5_compression;
+    p.output
         .layouts
         .iter()
         .map(|l| -> Result<Box<dyn Sink>, SplatErrors> {
             Ok(match l {
-                Layout::Parse => {
-                    Box::new(output::parse::ParseSink::new(dir, &sim.params, &sim.cells)?)
-                }
-                Layout::TenxMtx => Box::new(output::tenx_mtx::TenxMtxSink::new(dir, &sim.params)?),
+                Layout::Parse => Box::new(output::parse::ParseSink::new(dir, p, &sim.cells)?),
+                Layout::TenxMtx => Box::new(output::tenx_mtx::TenxMtxSink::new(dir, p)?),
+                Layout::H5ad => Box::new(output::h5ad::H5adSink::new(
+                    dir, p, &sim.cells, &sim.genes, deflate,
+                )?),
+                Layout::TenxH5 => Box::new(output::tenx_h5::TenxH5Sink::new(dir, p, deflate)?),
             })
         })
         .collect()

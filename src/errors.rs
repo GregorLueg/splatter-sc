@@ -26,6 +26,9 @@ pub enum SplatErrors {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("HDF5 error: {0}")]
+    Hdf5(#[from] hdf5::Error),
 }
 
 /// Shorthand for an [`SplatErrors::InvalidParam`].

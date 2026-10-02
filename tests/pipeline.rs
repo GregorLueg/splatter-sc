@@ -24,7 +24,8 @@ fn small_params(dir: &Path, seed: u64) -> SplatParams {
         seed: Some(seed),
         output: OutputParams {
             dir: dir.to_path_buf(),
-            layouts: vec![Layout::Parse, Layout::TenxMtx],
+            layouts: vec![Layout::Parse, Layout::TenxMtx, Layout::H5ad, Layout::TenxH5],
+            h5_compression: Some(1),
         },
         ..Default::default()
     }
@@ -46,7 +47,9 @@ fn run_with_threads(params: SplatParams, threads: usize) {
         .install(|| splatter_sc::run(params).unwrap());
 }
 
-/// Files whose bytes must match between runs.
+/// Files whose bytes must match between runs. The HDF5 files are left out:
+/// libhdf5 stores object modification times by default. Their content is
+/// checked against the mtx with external readers.
 const FILES: &[&str] = &[
     "DGE.mtx",
     "cell_metadata.csv",

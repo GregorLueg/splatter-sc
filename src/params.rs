@@ -122,6 +122,10 @@ pub enum Layout {
     Parse,
     /// `tenx/matrix.mtx.gz` (genes x cells), `barcodes.tsv.gz`, `features.tsv.gz`
     TenxMtx,
+    /// `DGE.h5ad`, float32 CSR with cells as rows
+    H5ad,
+    /// `matrix.h5`, Cell Ranger v3 layout
+    TenxH5,
 }
 
 /// Where and how to write the output.
@@ -132,6 +136,9 @@ pub struct OutputParams {
     pub dir: PathBuf,
     /// Layouts to write; all go into `dir`
     pub layouts: Vec<Layout>,
+    /// gzip level (0-9) for the HDF5 count datasets; `None` writes them
+    /// uncompressed. HDF5 compresses on the single writer thread.
+    pub h5_compression: Option<u8>,
 }
 
 impl Default for OutputParams {
@@ -139,6 +146,7 @@ impl Default for OutputParams {
         Self {
             dir: PathBuf::from("splat_out"),
             layouts: vec![Layout::Parse],
+            h5_compression: None,
         }
     }
 }
@@ -519,6 +527,9 @@ impl SplatParams {
         }
         if self.output.layouts.is_empty() {
             return Err(invalid("output.layouts", "must name at least one layout"));
+        }
+        if self.output.h5_compression.is_some_and(|l| l > 9) {
+            return Err(invalid("output.h5_compression", "gzip level must be 0-9"));
         }
 
         self.n_cells = Some(self.n_cells());

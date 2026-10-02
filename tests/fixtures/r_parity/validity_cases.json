@@ -1,0 +1,93 @@
+[
+  {
+    "name": "valid_groups",
+    "params": {
+      "group.prob": [0.2, 0.8]
+    },
+    "valid": true
+  },
+  {
+    "name": "valid_batches",
+    "params": {
+      "batchCells": [10, 20],
+      "batch.facLoc": [0.1, 0.2]
+    },
+    "valid": true
+  },
+  {
+    "name": "batch_loc_length",
+    "params": {
+      "batchCells": [10, 10],
+      "batch.facLoc": [0.1, 0.2, 0.3]
+    },
+    "valid": false
+  },
+  {
+    "name": "de_prob_length",
+    "params": {
+      "group.prob": [0.5, 0.5],
+      "de.prob": [0.1, 0.2, 0.3]
+    },
+    "valid": false
+  },
+  {
+    "name": "out_prob_range",
+    "params": {
+      "out.prob": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "lib_scale_negative",
+    "params": {
+      "lib.scale": -1
+    },
+    "valid": false
+  },
+  {
+    "name": "de_down_prob_range",
+    "params": {
+      "de.downProb": 2
+    },
+    "valid": false
+  },
+  {
+    "name": "bcv_common_negative",
+    "params": {
+      "bcv.common": -0.1
+    },
+    "valid": false
+  },
+  {
+    "name": "n_genes_zero",
+    "params": {
+      "nGenes": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "batch_scale_negative",
+    "params": {
+      "batchCells": [10, 10],
+      "batch.facScale": -1
+    },
+    "valid": false
+  },
+  {
+    "name": "dropout_experiment_length",
+    "params": {
+      "dropout.mid": [1, 2],
+      "dropout.shape": [1, 2],
+      "dropout.type": "experiment"
+    },
+    "valid": false
+  },
+  {
+    "name": "dropout_batch_length",
+    "params": {
+      "batchCells": [10, 10],
+      "dropout.type": "batch"
+    },
+    "valid": false
+  }
+]

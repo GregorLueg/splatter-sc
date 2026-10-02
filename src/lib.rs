@@ -98,19 +98,35 @@ impl Simulation {
     pub fn new(params: SplatParams) -> Result<Self, SplatErrors> {
         let seed = params.seed();
         let genes = GeneTruth::simulate(&params, &mut stream_rng(seed, STREAM_GENES))?;
+        let cells = CellMeta::simulate(&params, &mut stream_rng(seed, STREAM_CELLS))?;
+        Ok(Self::from_parts(params, genes, cells))
+    }
+
+    /// Build a simulation from given gene truth and cell metadata, e.g. to
+    /// run on another implementation's draws.
+    ///
+    /// ### Params
+    ///
+    /// * `params` - Output of [`SplatParams::resolve`]
+    /// * `genes` - Gene truth matching `params`
+    /// * `cells` - Cell metadata matching `params`
+    ///
+    /// ### Returns
+    ///
+    /// The simulation, ready to generate chunks.
+    pub fn from_parts(params: SplatParams, genes: GeneTruth, cells: CellMeta) -> Self {
         let n_groups = if params.method == Method::Groups {
             params.n_groups()
         } else {
             1
         };
         let profiles = Profiles::new(&genes, params.n_batches(), n_groups);
-        let cells = CellMeta::simulate(&params, &mut stream_rng(seed, STREAM_CELLS))?;
-        Ok(Self {
+        Self {
             params,
             genes,
             profiles,
             cells,
-        })
+        }
     }
 
     /// Number of chunks.

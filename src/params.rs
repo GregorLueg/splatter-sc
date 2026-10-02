@@ -445,12 +445,12 @@ impl SplatParams {
         if !self.lib_loc.is_finite() {
             return Err(invalid("lib.loc", "must be finite"));
         }
-        check_range(&[self.lib_scale], 0.0, f64::MAX, "lib.scale")?;
+        check_range(&[self.lib_scale], 0.0, f64::INFINITY, "lib.scale")?;
         check_range(&[self.out_prob], 0.0, 1.0, "out.prob")?;
         if !self.out_fac_loc.is_finite() {
             return Err(invalid("out.facLoc", "must be finite"));
         }
-        check_range(&[self.out_fac_scale], 0.0, f64::MAX, "out.facScale")?;
+        check_range(&[self.out_fac_scale], 0.0, f64::INFINITY, "out.facScale")?;
 
         if self.group_prob.is_empty() {
             return Err(invalid("group.prob", "must not be empty"));
@@ -477,7 +477,7 @@ impl SplatParams {
         check_range(&self.de_down_prob, 0.0, 1.0, "de.downProb")?;
         check_range(&self.de_fac_scale, 0.0, f64::INFINITY, "de.facScale")?;
 
-        check_range(&[self.bcv_common], 0.0, f64::MAX, "bcv.common")?;
+        check_range(&[self.bcv_common], 0.0, f64::INFINITY, "bcv.common")?;
         // R allows 0; rchisq(df = 0) is all zeros there, so every BCV is Inf.
         if !(self.bcv_df > 0.0) {
             return Err(invalid("bcv.df", "must be positive (or \"Inf\")"));

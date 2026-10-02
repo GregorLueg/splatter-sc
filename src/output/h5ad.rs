@@ -16,6 +16,10 @@ use crate::genes::GeneTruth;
 use crate::output::tables::{cell_name, gene_name};
 use crate::params::{Method, SplatParams};
 
+//////////////
+// H5adSink //
+//////////////
+
 /// Writer for the h5ad layout.
 pub struct H5adSink {
     /// Open file; kept so it closes after the last write
@@ -28,98 +32,6 @@ pub struct H5adSink {
     indices: Appender<i32>,
     /// `X/indptr`, accumulated
     indptr: Vec<i64>,
-}
-
-/// Write a categorical column.
-///
-/// ### Params
-///
-/// * `parent` - Dataframe group
-/// * `name` - Column name
-/// * `codes` - Zero-based category per row
-/// * `categories` - Category labels
-///
-/// ### Returns
-///
-/// `Ok(())` or an HDF5 error.
-fn write_categorical(
-    parent: &Group,
-    name: &str,
-    codes: &[u32],
-    categories: &[String],
-) -> Result<(), SplatErrors> {
-    let g = parent.create_group(name)?;
-    encoding(&g, "categorical", "0.2.0")?;
-    g.new_attr::<bool>()
-        .shape(())
-        .create("ordered")?
-        .write_scalar(&false)?;
-    let codes: Vec<i32> = codes.iter().map(|&c| c as i32).collect();
-    write_1d(&g, "codes", &codes)?;
-    write_string_array(&g, "categories", categories)
-}
-
-/// Write a string-array dataset.
-///
-/// ### Params
-///
-/// * `parent` - Parent group
-/// * `name` - Dataset name
-/// * `values` - Strings
-///
-/// ### Returns
-///
-/// `Ok(())` or an HDF5 error.
-fn write_string_array(parent: &Group, name: &str, values: &[String]) -> Result<(), SplatErrors> {
-    let v: Vec<_> = values.iter().map(|s| vlu(s)).collect();
-    let ds = write_1d(parent, name, &v)?;
-    encoding(&ds, "string-array", "0.2.0")
-}
-
-/// Write a float column.
-///
-/// ### Params
-///
-/// * `parent` - Dataframe group
-/// * `name` - Column name
-/// * `values` - Values
-///
-/// ### Returns
-///
-/// `Ok(())` or an HDF5 error.
-fn write_numeric(parent: &Group, name: &str, values: &[f64]) -> Result<(), SplatErrors> {
-    let ds = write_1d(parent, name, values)?;
-    encoding(&ds, "array", "0.2.0")
-}
-
-/// Create a dataframe group with its index.
-///
-/// ### Params
-///
-/// * `file` - Open file
-/// * `name` - `obs` or `var`
-/// * `index` - Row names
-/// * `columns` - Column names in order
-///
-/// ### Returns
-///
-/// The group, ready for columns.
-fn dataframe(
-    file: &File,
-    name: &str,
-    index: &[String],
-    columns: &[String],
-) -> Result<Group, SplatErrors> {
-    let g = file.create_group(name)?;
-    encoding(&g, "dataframe", "0.2.0")?;
-    super::h5::attr_str(&g, "_index", "_index")?;
-    let cols: Vec<_> = columns.iter().map(|s| vlu(s)).collect();
-    g.new_attr::<hdf5::types::VarLenUnicode>()
-        .shape(cols.len())
-        .create("column-order")?
-        .write_raw(&cols)?;
-    write_string_array(&g, "_index", index)?;
-    Ok(g)
 }
 
 impl H5adSink {
@@ -227,4 +139,100 @@ impl Sink for H5adSink {
         write_1d(&self.x, "indptr", &self.indptr)?;
         Ok(())
     }
+}
+
+/////////////
+// Helpers //
+/////////////
+
+/// Write a categorical column.
+///
+/// ### Params
+///
+/// * `parent` - Dataframe group
+/// * `name` - Column name
+/// * `codes` - Zero-based category per row
+/// * `categories` - Category labels
+///
+/// ### Returns
+///
+/// `Ok(())` or an HDF5 error.
+fn write_categorical(
+    parent: &Group,
+    name: &str,
+    codes: &[u32],
+    categories: &[String],
+) -> Result<(), SplatErrors> {
+    let g = parent.create_group(name)?;
+    encoding(&g, "categorical", "0.2.0")?;
+    g.new_attr::<bool>()
+        .shape(())
+        .create("ordered")?
+        .write_scalar(&false)?;
+    let codes: Vec<i32> = codes.iter().map(|&c| c as i32).collect();
+    write_1d(&g, "codes", &codes)?;
+    write_string_array(&g, "categories", categories)
+}
+
+/// Write a string-array dataset.
+///
+/// ### Params
+///
+/// * `parent` - Parent group
+/// * `name` - Dataset name
+/// * `values` - Strings
+///
+/// ### Returns
+///
+/// `Ok(())` or an HDF5 error.
+fn write_string_array(parent: &Group, name: &str, values: &[String]) -> Result<(), SplatErrors> {
+    let v: Vec<_> = values.iter().map(|s| vlu(s)).collect();
+    let ds = write_1d(parent, name, &v)?;
+    encoding(&ds, "string-array", "0.2.0")
+}
+
+/// Write a float column.
+///
+/// ### Params
+///
+/// * `parent` - Dataframe group
+/// * `name` - Column name
+/// * `values` - Values
+///
+/// ### Returns
+///
+/// `Ok(())` or an HDF5 error.
+fn write_numeric(parent: &Group, name: &str, values: &[f64]) -> Result<(), SplatErrors> {
+    let ds = write_1d(parent, name, values)?;
+    encoding(&ds, "array", "0.2.0")
+}
+
+/// Create a dataframe group with its index.
+///
+/// ### Params
+///
+/// * `file` - Open file
+/// * `name` - `obs` or `var`
+/// * `index` - Row names
+/// * `columns` - Column names in order
+///
+/// ### Returns
+///
+/// The group, ready for columns.
+fn dataframe(
+    file: &File,
+    name: &str,
+    index: &[String],
+    columns: &[String],
+) -> Result<Group, SplatErrors> {
+    let g = file.create_group(name)?;
+    encoding(&g, "dataframe", "0.2.0")?;
+    super::h5::attr_str(&g, "_index", "_index")?;
+    let cols: Vec<_> = columns.iter().map(|s| vlu(s)).collect();
+    g.new_attr::<hdf5::types::VarLenUnicode>()
+        .shape(cols.len())
+        .create("column-order")?
+        .write_raw(&cols)?;
+    write_string_array(&g, "_index", index)?;
+    Ok(g)
 }

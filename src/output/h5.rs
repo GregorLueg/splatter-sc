@@ -5,10 +5,18 @@ use hdf5::{Dataset, Group, H5Type, Location};
 
 use crate::errors::SplatErrors;
 
+////////////
+// Consts //
+////////////
+
 /// Elements per HDF5 chunk of the streamed `data` / `indices` datasets.
 /// 2^18 elements is 1 MB of `f32`, in the range anndata and Cell Ranger
 /// files use; large enough that chunk indexing stays cheap at 1e10 entries.
 const H5_CHUNK: usize = 1 << 18;
+
+/////////////
+// Helpers //
+/////////////
 
 /// A variable-length UTF-8 string, as h5py and anndata write them.
 ///
@@ -76,6 +84,10 @@ pub(crate) fn write_1d<T: H5Type>(
 ) -> Result<Dataset, SplatErrors> {
     Ok(group.new_dataset_builder().with_data(data).create(name)?)
 }
+
+//////////////
+// Appender //
+//////////////
 
 /// A 1-D dataset that grows as chunks of cells arrive.
 pub(crate) struct Appender<T> {

@@ -12,6 +12,8 @@ include = ["src/**/*", "Cargo.toml", "Cargo.lock", "LICENSE", "README.md"]
 ## Compile the bundled HDF5 C library from source instead of linking an
 ## external libhdf5 found via `HDF5_DIR` or pkg-config.
 hdf5-static = ["hdf5/static"]
+## Run the R parity tests on the large fixtures as well.
+large-scale-tests = []
 
 [dependencies]
 flate2 = "1.1"

@@ -8,19 +8,29 @@
 //!    (`BaseCellMeans`, `BCV`) reproduce R's assays.
 //! 3. Distributional: the Rust simulator with R's parameters matches R's
 //!    output in distribution (two-sample Kolmogorov-Smirnov), as the random
-//!    streams differ.
+//!    streams differ. Runs on the `medium` fixtures; the `large` ones need
+//!    `--features large-scale-tests` (best with `--release`).
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
+use rayon::prelude::*;
 use splatter_sc::Simulation;
 use splatter_sc::cells::{CellMeta, bcv};
 use splatter_sc::genes::{GeneTruth, Profiles};
 use splatter_sc::params::{Method, SplatParams};
 
 /// Settings written by the R script.
-const SETTINGS: &[&str] = &["single", "groups_batches", "dropout", "lib_norm"];
+const SETTINGS: &[&str] = &[
+    "single",
+    "groups_batches",
+    "dropout",
+    "lib_norm",
+    "dropout_batch",
+    "dropout_group",
+    "bcv_inf",
+];
 
 /// Relative tolerance of the exact tier.
 const EXACT_RTOL: f64 = 1e-10;
@@ -39,7 +49,7 @@ const KS_ALPHA: f64 = 0.001;
 /// ### Params
 ///
 /// * `setting` - Setting name
-/// * `size` - `small` or `large`
+/// * `size` - `small`, `medium` or `large`
 ///
 /// ### Returns
 ///
@@ -261,17 +271,24 @@ fn log_selected(v: &[f64]) -> Vec<f64> {
 #[test]
 fn test_r_parity_params_expand_like_r() {
     for setting in SETTINGS {
-        for size in ["small", "large"] {
+        for size in ["small", "medium", "large"] {
             let dir = fixture(setting, size);
             let p = load_params(&dir);
             let r: serde_json::Value = serde_json::from_reader(
                 std::fs::File::open(dir.join("params_expanded.json")).unwrap(),
             )
             .unwrap();
+            // jsonlite writes Inf as the string "Inf".
+            let num = |x: &serde_json::Value| {
+                x.as_f64().unwrap_or_else(|| {
+                    assert_eq!(x.as_str(), Some("Inf"));
+                    f64::INFINITY
+                })
+            };
             let vec = |k: &str| -> Vec<f64> {
                 match &r[k] {
-                    serde_json::Value::Array(a) => a.iter().map(|x| x.as_f64().unwrap()).collect(),
-                    x => vec![x.as_f64().unwrap()],
+                    serde_json::Value::Array(a) => a.iter().map(num).collect(),
+                    x => vec![num(x)],
                 }
             };
             assert_eq!(p.n_genes as f64, r["nGenes"].as_f64().unwrap());
@@ -419,12 +436,6 @@ fn test_r_parity_base_cell_means_and_bcv_exact() {
 // Tier 3: distributional //
 ////////////////////////////
 
-/// Tolerance on the gap between the sd of R-vs-Rust and Rust-vs-Rust paired
-/// z-scores. A sample sd over ~2000 genes has a standard error of ~0.016, a
-/// difference of two ~0.022; 0.1 is about four of those. Largest gap on the
-/// first run: 0.029. Dropping the BCV chi factor gives a gap of 1.0.
-const Z_SD_TOL: f64 = 0.1;
-
 /// The same summaries the R script writes, from a Rust simulation.
 struct Summaries {
     /// Per gene mean count
@@ -479,8 +490,11 @@ fn summarise(sim: &Simulation) -> Summaries {
     let mut total = Vec::new();
     let mut detected = Vec::new();
 
-    for i in 0..sim.n_chunks() {
-        let chunk = sim.chunk(i).unwrap();
+    let chunks: Vec<_> = (0..sim.n_chunks())
+        .into_par_iter()
+        .map(|i| sim.chunk(i).unwrap())
+        .collect();
+    for chunk in &chunks {
         for (j, w) in chunk.indptr.windows(2).enumerate() {
             let k = sim.cells.group[chunk.start + j] as usize;
             group_n[k] += 1.0;
@@ -544,7 +558,8 @@ fn mean_sd(z: &[f64]) -> (f64, f64) {
 
 /// Assert paired z-scores of R against Rust behave like those of two Rust
 /// runs on the same truth: mean within four standard errors of zero, and
-/// standard deviation within [`Z_SD_TOL`] of the Rust-vs-Rust one. The null
+/// standard deviation within four standard errors of the Rust-vs-Rust one,
+/// taking `sd / sqrt(2 (n - 1))` as the standard error of a sample sd. The null
 /// sd is not one, since studentised means of skewed counts are
 /// under-dispersed.
 ///
@@ -557,13 +572,14 @@ fn assert_z(what: &str, z: &[f64], z_null: &[f64]) {
     let (mean, sd) = mean_sd(z);
     let (_, sd_null) = mean_sd(z_null);
     let bound = 4.0 / (z.len() as f64).sqrt();
+    let sd_bound = 4.0 * sd_null / (z_null.len() as f64 - 1.0).sqrt();
     eprintln!(
-        "  paired z {what}: mean {mean:.4} (bound {bound:.4}), sd {sd:.4}, null sd {sd_null:.4}, n = {}",
+        "  paired z {what}: mean {mean:.4} (bound {bound:.4}), sd {sd:.4}, null sd {sd_null:.4} (bound {sd_bound:.4}), n = {}",
         z.len()
     );
     assert!(mean.abs() < bound, "{what}: mean z = {mean:.4}");
     assert!(
-        (sd - sd_null).abs() < Z_SD_TOL,
+        (sd - sd_null).abs() < sd_bound,
         "{what}: sd z = {sd:.4} vs null {sd_null:.4}"
     );
 }
@@ -606,11 +622,14 @@ fn selected(v: &[f64]) -> Vec<bool> {
 /// Per-gene count summaries are left out here: all genes of a run share the
 /// normaliser and outlier median, so two runs differ by more than KS allows
 /// even Rust against Rust.
-#[test]
-fn test_r_parity_generative_distributions() {
+///
+/// ### Params
+///
+/// * `size` - Fixture size
+fn generative_distributions(size: &str) {
     for setting in SETTINGS {
         eprintln!("{setting}:");
-        let dir = fixture(setting, "large");
+        let dir = fixture(setting, size);
         let sim = Simulation::new(load_params(&dir)).unwrap();
         let rd = Table::read(&dir.join("rowData.tsv.gz"));
         let cd = Table::read(&dir.join("colData.tsv.gz"));
@@ -735,11 +754,14 @@ fn z_zero_frac(a: &[f64], b: &[f64], n: f64) -> Vec<f64> {
 /// Poisson and dropout draws differ. Per-gene summaries are compared gene by
 /// gene with paired z-scores against a Rust-vs-Rust null on the same truth;
 /// per-cell ones by KS.
-#[test]
-fn test_r_parity_counts_on_r_truth() {
+///
+/// ### Params
+///
+/// * `size` - Fixture size
+fn counts_on_r_truth(size: &str) {
     for setting in SETTINGS {
         eprintln!("{setting}:");
-        let dir = fixture(setting, "large");
+        let dir = fixture(setting, size);
         let params = load_params(&dir);
         let (genes, cells) = truth_from_r(&dir, &params);
         let with_groups = params.method == Method::Groups;
@@ -781,4 +803,26 @@ fn test_r_parity_counts_on_r_truth() {
         assert_ks("cell total", &cs.col("Total"), &ours.total);
         assert_ks("cell detected", &cs.col("Detected"), &ours.detected);
     }
+}
+
+#[test]
+fn test_r_parity_generative_distributions() {
+    generative_distributions("medium");
+}
+
+#[test]
+fn test_r_parity_counts_on_r_truth() {
+    counts_on_r_truth("medium");
+}
+
+#[cfg(feature = "large-scale-tests")]
+#[test]
+fn test_r_parity_generative_distributions_large() {
+    generative_distributions("large");
+}
+
+#[cfg(feature = "large-scale-tests")]
+#[test]
+fn test_r_parity_counts_on_r_truth_large() {
+    counts_on_r_truth("large");
 }

@@ -121,9 +121,20 @@ impl CellMeta {
             .collect();
 
         let group = if params.method == Method::Groups {
-            let w = WeightedIndex::new(&params.group_prob)
+            let rows = match &params.batch_group_prob {
+                Some(rows) => rows.as_slice(),
+                None => std::slice::from_ref(&params.group_prob),
+            };
+            let w = rows
+                .iter()
+                .map(WeightedIndex::new)
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| invalid("group.prob", e.to_string()))?;
-            (0..n).map(|_| w.sample(rng) as u32).collect()
+            batch
+                .iter()
+                // one shared row without batch.groupProb
+                .map(|&b| w[(b as usize).min(w.len() - 1)].sample(rng) as u32)
+                .collect()
         } else {
             vec![0; n]
         };
@@ -358,6 +369,24 @@ mod tests {
         let cells = CellMeta::simulate(&params, &mut rng).unwrap();
         assert_eq!(cells.batch, vec![0, 0, 0, 1, 1]);
         assert!(cells.group.iter().all(|&g| g == 0));
+    }
+
+    #[test]
+    fn test_batch_group_prob_zero_groups_absent() {
+        let params = SplatParams {
+            method: Method::Groups,
+            batch_cells: vec![500, 500],
+            group_prob: vec![0.5, 0.5],
+            batch_group_prob: Some(vec![vec![1.0, 0.0], vec![0.3, 0.7]]),
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap();
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let cells = CellMeta::simulate(&params, &mut rng).unwrap();
+        assert!(cells.group[..500].iter().all(|&g| g == 0));
+        let n1 = cells.group[500..].iter().filter(|&&g| g == 1).count();
+        assert!((300..400).contains(&n1), "{n1}");
     }
 
     #[test]

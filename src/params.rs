@@ -273,6 +273,11 @@ pub struct SplatParams {
     /// Group probabilities; rescaled to sum to one
     #[serde(rename = "group.prob", deserialize_with = "one_or_many")]
     pub group_prob: Vec<f64>,
+    /// Group probabilities per batch, one row of `nGroups` per batch; rows
+    /// are rescaled to sum to one and may hold zeros. Overrides `group.prob`
+    /// for the group draw. Not in splatter.
+    #[serde(rename = "batch.groupProb")]
+    pub batch_group_prob: Option<Vec<Vec<f64>>>,
     /// Probability that a gene is DE, per group
     #[serde(rename = "de.prob", deserialize_with = "one_or_many")]
     pub de_prob: Vec<f64>,
@@ -345,6 +350,7 @@ impl Default for SplatParams {
             out_fac_loc: 4.0,
             out_fac_scale: 0.5,
             group_prob: vec![1.0],
+            batch_group_prob: None,
             de_prob: vec![0.1],
             de_down_prob: vec![0.5],
             de_fac_loc: vec![0.1],
@@ -485,6 +491,28 @@ impl SplatParams {
         }
 
         let n_groups = self.n_groups();
+        if let Some(rows) = &mut self.batch_group_prob {
+            if rows.len() != n_batches {
+                return Err(invalid(
+                    "batch.groupProb",
+                    format!("{} rows but {n_batches} batches", rows.len()),
+                ));
+            }
+            for row in rows.iter_mut() {
+                if row.len() != n_groups {
+                    return Err(invalid(
+                        "batch.groupProb",
+                        format!("row of length {} but {n_groups} groups", row.len()),
+                    ));
+                }
+                check_range(row, 0.0, 1.0, "batch.groupProb")?;
+                let total: f64 = row.iter().sum();
+                if !(total > 0.0) {
+                    return Err(invalid("batch.groupProb", "every row needs a positive sum"));
+                }
+                row.iter_mut().for_each(|p| *p /= total);
+            }
+        }
         expand(&mut self.de_prob, n_groups, "de.prob")?;
         expand(&mut self.de_down_prob, n_groups, "de.downProb")?;
         expand(&mut self.de_fac_loc, n_groups, "de.facLoc")?;
@@ -607,6 +635,28 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(p.resolve().unwrap().group_prob, vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn test_params_batch_group_prob_checked() {
+        let base = SplatParams {
+            batch_cells: vec![10, 10],
+            group_prob: vec![0.5, 0.5],
+            ..Default::default()
+        };
+        let p = SplatParams {
+            batch_group_prob: Some(vec![vec![2.0, 2.0]]),
+            ..base.clone()
+        };
+        assert!(p.resolve().is_err());
+        let p = SplatParams {
+            batch_group_prob: Some(vec![vec![0.2, 0.2], vec![0.0, 1.0]]),
+            ..base
+        };
+        assert_eq!(
+            p.resolve().unwrap().batch_group_prob,
+            Some(vec![vec![0.5, 0.5], vec![0.0, 1.0]])
+        );
     }
 
     #[test]

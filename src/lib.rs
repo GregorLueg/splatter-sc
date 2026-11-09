@@ -36,8 +36,8 @@ use rayon::prelude::*;
 use crate::cells::{CellChunk, CellMeta, simulate_chunk};
 use crate::errors::SplatErrors;
 use crate::genes::{GeneTruth, Profiles};
-use crate::output::{encode, write_gz};
-use crate::params::{Method, SplatParams};
+use crate::output::{H5Chunks, H5Encoder, encode, write_gz};
+use crate::params::{Layout, Method, SplatParams};
 
 ////////////
 // Consts //
@@ -48,7 +48,10 @@ use crate::params::{Method, SplatParams};
 /// flight is about `2 * threads * CHUNKS_PER_THREAD * CELL_CHUNK` cells of
 /// CSR plus encoded text, ~20 bytes per nonzero. At splatter's default
 /// `lib.loc = 11` (~8k nonzeros per cell over 20k genes) one 256-cell chunk
-/// is ~45 MB.
+/// is ~45 MB. The HDF5 encoders add, for the window being encoded only, its
+/// raw values (8 bytes per nonzero for h5ad, 12 for 10x h5) before they are
+/// cut into chunks; between windows each keeps under one chunk per dataset,
+/// and the compressed chunks in the channel are smaller than the raw values.
 pub const CELL_CHUNK: usize = 256;
 
 /// Chunks per thread in one window. Two windows are alive at most, one
@@ -176,6 +179,19 @@ impl Simulation {
             &mut rng,
         )
     }
+
+    /// Total nonzeros extrapolated from chunk 0. Sizes the h5ad chunks,
+    /// which h5py derives from the final length that a streamed write does
+    /// not know yet. Chunk 0 does not depend on the thread count, so
+    /// neither does the file layout.
+    ///
+    /// ### Returns
+    ///
+    /// The estimate.
+    pub fn nnz_hint(&self) -> Result<usize, SplatErrors> {
+        let c = self.chunk(0)?;
+        Ok(c.counts.len() * self.cells.n_cells() / c.n_cells())
+    }
 }
 
 ////////////////
@@ -232,27 +248,45 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
         &dir.join("genes_truth.tsv.gz"),
         &output::tables::gene_table(&sim.genes, '\t'),
     )?;
-    let sinks = output::open_sinks(&sim)?;
+    let nnz_hint = if sim.params.output.layouts.contains(&Layout::H5ad) {
+        sim.nnz_hint()?
+    } else {
+        0
+    };
+    let sinks = output::open_sinks(&sim, nnz_hint)?;
     let setup = t0.elapsed();
 
     let layouts = sim.params.output.layouts.clone();
+    let parse_gzip = sim.params.output.parse_gzip;
     let n_chunks = sim.n_chunks();
     let n_cells = sim.cells.n_cells();
     let window = rayon::current_num_threads() * CHUNKS_PER_THREAD;
+    // Built here, not in the writer: their rayon work must run on the pool
+    // `run` was called in, and the writer thread would use the global one.
+    let mut encoders: Vec<Option<H5Encoder>> = layouts
+        .iter()
+        .map(|&l| H5Encoder::new(l, &sim.params.output, nnz_hint))
+        .collect();
 
-    type Window = Vec<(CellChunk, Vec<Vec<u8>>)>;
+    // Cell chunks with their per-layout text, plus per-layout HDF5 chunks.
+    type Window = (Vec<(CellChunk, Vec<Vec<u8>>)>, Vec<Option<H5Chunks>>);
     let (simulate, write, sinks, nnz) = std::thread::scope(|s| {
         let (tx, rx) = sync_channel::<Window>(1);
         let writer = s.spawn(move || -> Result<_, SplatErrors> {
             let mut sinks = sinks;
             let (mut busy, mut nnz) = (Duration::ZERO, 0u64);
-            for batch in rx {
+            for (batch, h5) in rx {
                 let t = Instant::now();
                 for (chunk, encoded) in &batch {
                     for (sink, e) in sinks.iter_mut().zip(encoded) {
                         sink.write_chunk(chunk, e)?;
                     }
                     nnz += chunk.counts.len() as u64;
+                }
+                for (sink, h) in sinks.iter_mut().zip(&h5) {
+                    if let Some(h) = h {
+                        sink.write_h5(h)?;
+                    }
                 }
                 busy += t.elapsed();
             }
@@ -269,11 +303,22 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
                     let chunk = sim.chunk(i)?;
                     let encoded = layouts
                         .iter()
-                        .map(|&l| encode(l, &chunk))
+                        .map(|&l| encode(l, parse_gzip, &chunk))
                         .collect::<Result<_, _>>()?;
                     Ok((chunk, encoded))
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|b| {
+                    let h5 = encoders
+                        .iter_mut()
+                        .map(|e| {
+                            e.as_mut()
+                                .map(|e| e.encode(b.iter().map(|(c, _)| c)))
+                                .transpose()
+                        })
+                        .collect::<Result<_, _>>()?;
+                    Ok((b, h5))
+                });
             simulate += t.elapsed();
             match batch {
                 // A send error means the writer died; its error surfaces on join.
@@ -291,6 +336,21 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
             eprint!("\rSimulated {done} / {n_cells} cells");
         }
         eprintln!();
+        if result.is_ok() {
+            let t = Instant::now();
+            let tails = encoders
+                .iter_mut()
+                .map(|e| e.as_mut().map(H5Encoder::finish).transpose())
+                .collect::<Result<_, _>>();
+            simulate += t.elapsed();
+            match tails {
+                // A send error means the writer died; its error surfaces on join.
+                Ok(h5) => {
+                    let _ = tx.send((Vec::new(), h5));
+                }
+                Err(e) => result = Err(e),
+            }
+        }
         drop(tx);
         let (sinks, write, nnz) = writer.join().expect("writer thread panicked")?;
         result.map(|_| (simulate, write, sinks, nnz))

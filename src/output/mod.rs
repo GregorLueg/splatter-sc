@@ -1,6 +1,7 @@
 //! Output layouts. Each layout is a [`Sink`] that receives chunks in cell
-//! order on one writer thread. Text encoding of a chunk happens beforehand
-//! on the worker threads via [`encode`], so the writer only appends bytes.
+//! order on one writer thread. Encoding happens beforehand on the worker
+//! threads, via [`encode`] for text and [`H5Encoder`] for HDF5 chunks, so
+//! the writer only appends bytes.
 
 mod h5;
 pub mod h5ad;
@@ -9,6 +10,8 @@ pub mod parse;
 pub mod tables;
 pub mod tenx_h5;
 pub mod tenx_mtx;
+
+pub use h5::{H5Chunks, H5Encoder};
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -97,6 +100,21 @@ pub trait Sink: Send {
     /// `Ok(())` or an IO error.
     fn write_chunk(&mut self, chunk: &CellChunk, encoded: &[u8]) -> Result<(), SplatErrors>;
 
+    /// Store filtered HDF5 chunks from this layout's [`H5Encoder`]. Only the
+    /// HDF5 sinks receive any; the default does nothing.
+    ///
+    /// ### Params
+    ///
+    /// * `chunks` - Filtered `data` and `indices` chunks, in order
+    ///
+    /// ### Returns
+    ///
+    /// `Ok(())` or an HDF5 error.
+    fn write_h5(&mut self, chunks: &H5Chunks) -> Result<(), SplatErrors> {
+        let _ = chunks;
+        Ok(())
+    }
+
     /// Flush and finalise all files.
     ///
     /// ### Returns
@@ -114,15 +132,17 @@ pub trait Sink: Send {
 /// ### Params
 ///
 /// * `layout` - Target layout
+/// * `parse_gzip` - Whether the Parse matrix is gzipped
 /// * `chunk` - Counts in cell-major CSR
 ///
 /// ### Returns
 ///
-/// The bytes the layout's sink appends: plain MatrixMarket lines for Parse,
-/// one gzip member for 10x mtx, nothing for the HDF5 layouts, which take the
-/// CSR directly.
-pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
+/// The bytes the layout's sink appends: MatrixMarket lines for Parse (one
+/// gzip member if `parse_gzip`), one gzip member for 10x mtx, nothing for the
+/// HDF5 layouts, which go through [`H5Encoder`] once per window.
+pub fn encode(layout: Layout, parse_gzip: bool, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
     match layout {
+        Layout::Parse if parse_gzip => gzip(&mtx::encode_lines(chunk, true)),
         Layout::Parse => Ok(mtx::encode_lines(chunk, true)),
         Layout::TenxMtx => gzip(&mtx::encode_lines(chunk, false)),
         Layout::H5ad | Layout::TenxH5 => Ok(Vec::new()),
@@ -134,13 +154,13 @@ pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors>
 /// ### Params
 ///
 /// * `sim` - The simulation
+/// * `nnz_hint` - Expected total nonzeros, for the h5ad chunk length
 ///
 /// ### Returns
 ///
 /// One sink per layout, in `output.layouts` order.
-pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
+pub fn open_sinks(sim: &Simulation, nnz_hint: usize) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
     let (p, dir) = (&sim.params, &sim.params.output.dir);
-    let deflate = p.output.h5_compression;
     p.output
         .layouts
         .iter()
@@ -149,9 +169,18 @@ pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
                 Layout::Parse => Box::new(parse::ParseSink::new(dir, p, &sim.cells)?),
                 Layout::TenxMtx => Box::new(tenx_mtx::TenxMtxSink::new(dir, p)?),
                 Layout::H5ad => Box::new(h5ad::H5adSink::new(
-                    dir, p, &sim.cells, &sim.genes, deflate,
+                    dir,
+                    p,
+                    &sim.cells,
+                    &sim.genes,
+                    p.output.h5ad_compression,
+                    nnz_hint,
                 )?),
-                Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(dir, p, deflate)?),
+                Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(
+                    dir,
+                    p,
+                    p.output.tenx_h5_compression,
+                )?),
             })
         })
         .collect()

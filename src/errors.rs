@@ -29,6 +29,12 @@ pub enum SplatErrors {
 
     #[error("HDF5 error: {0}")]
     Hdf5(#[from] hdf5::Error),
+
+    #[error("HDF5 direct chunk write failed at element offset {offset}.")]
+    ChunkWrite {
+        /// First element of the chunk
+        offset: usize,
+    },
 }
 
 /// Shorthand for an [`SplatErrors::InvalidParam`].

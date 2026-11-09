@@ -139,7 +139,7 @@ impl H5adSink {
     /// * `params` - Resolved parameters
     /// * `cells` - Cell metadata
     /// * `genes` - Gene truth
-    /// * `deflate` - Optional gzip level for `X`
+    /// * `deflate` - Optional gzip level for `X`; no shuffle, as scanpy
     ///
     /// ### Returns
     ///
@@ -210,8 +210,8 @@ impl H5adSink {
         indptr.push(0);
 
         Ok(Self {
-            data: Appender::new(&x, "data", deflate)?,
-            indices: Appender::new(&x, "indices", deflate)?,
+            data: Appender::new(&x, "data", deflate, false)?,
+            indices: Appender::new(&x, "indices", deflate, false)?,
             x,
             indptr,
             _file: file,

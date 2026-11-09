@@ -50,7 +50,9 @@ Thread count follows `RAYON_NUM_THREADS`. A minimal parameter file:
   "output": {
     "dir": "splat_out",
     "layouts": ["parse", "tenx_mtx", "h5ad", "tenx_h5"],
-    "h5_compression": 4
+    "h5ad_compression": 4,
+    "tenx_h5_compression": 4,
+    "parse_gzip": false
   }
 }
 ```
@@ -90,14 +92,24 @@ Plus one set of files per layout:
 
 | Layout | Files |
 |---|---|
-| `parse` | `DGE.mtx` (cells x genes), `cell_metadata.csv`, `all_genes.csv` |
+| `parse` | `DGE.mtx` or `DGE.mtx.gz` (cells x genes), `cell_metadata.csv`, `all_genes.csv` |
 | `tenx_mtx` | `tenx/matrix.mtx.gz` (genes x cells), `barcodes.tsv.gz`, `features.tsv.gz` |
 | `h5ad` | `DGE.h5ad`, float32 CSR with cells as rows, truth in `obs` and `var` |
 | `tenx_h5` | `matrix.h5`, Cell Ranger v3 layout |
 
-`h5_compression` sets the gzip level (0-9) of the HDF5 count datasets. Leave
-it out for uncompressed. HDF5 compresses on the single writer thread, not the
-simulation pool.
+Compression follows what the original tools write:
+
+- `tenx_mtx` is always gzipped (level 6, like the `gzip` CLI).
+- `tenx_h5_compression` sets the gzip level (0-9) of the counts in
+  `matrix.h5`, with the byte-shuffle filter in front, as Cell Ranger writes
+  it. Defaults to 4 (h5py's gzip level); `null` for uncompressed.
+- `h5ad_compression` does the same for `X` in `DGE.h5ad`, without shuffle.
+  Defaults to 4, as scanpy's `sc.write` (anndata's `write_h5ad` itself
+  defaults to uncompressed); `null` for uncompressed.
+- HDF5 compresses on the single writer thread, not the simulation pool.
+- `parse_gzip: true` writes `DGE.mtx.gz` instead of `DGE.mtx` (level 6,
+  compressed in parallel). Off by default, since Parse's own pipeline writes
+  it plain.
 
 ## How close is this to splatter?
 

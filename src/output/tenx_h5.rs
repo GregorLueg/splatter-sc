@@ -69,7 +69,8 @@ impl TenxH5Sink {
     ///
     /// * `dir` - Output directory
     /// * `params` - Resolved parameters
-    /// * `deflate` - Optional gzip level for `data` and `indices`
+    /// * `deflate` - Optional gzip level for `data` and `indices`, applied
+    ///   after byte-shuffle as Cell Ranger does
     ///
     /// ### Returns
     ///
@@ -98,8 +99,8 @@ impl TenxH5Sink {
         let mut indptr = Vec::with_capacity(n_cells + 1);
         indptr.push(0);
         Ok(Self {
-            data: Appender::new(&matrix, "data", deflate)?,
-            indices: Appender::new(&matrix, "indices", deflate)?,
+            data: Appender::new(&matrix, "data", deflate, true)?,
+            indices: Appender::new(&matrix, "indices", deflate, true)?,
             matrix,
             indptr,
             _file: file,

@@ -20,6 +20,10 @@ use crate::errors::{SplatErrors, invalid};
 /// Tolerance for `group.prob` summing to one, as R's `all.equal`.
 const GROUP_PROB_TOL: f64 = 1.5e-8;
 
+/// Default gzip level of the HDF5 count datasets: h5py's gzip default, which
+/// is what Cell Ranger and scanpy's `sc.write` write.
+const H5_GZIP_DEFAULT: u8 = 4;
+
 /////////////
 // Helpers //
 /////////////
@@ -166,7 +170,8 @@ pub enum DropoutType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Layout {
-    /// `DGE.mtx` (cells x genes), `cell_metadata.csv`, `all_genes.csv`
+    /// `DGE.mtx` or `DGE.mtx.gz` (cells x genes), `cell_metadata.csv`,
+    /// `all_genes.csv`
     Parse,
     /// `tenx/matrix.mtx.gz` (genes x cells), `barcodes.tsv.gz`, `features.tsv.gz`
     TenxMtx,
@@ -188,9 +193,16 @@ pub struct OutputParams {
     pub dir: PathBuf,
     /// Layouts to write; all go into `dir`
     pub layouts: Vec<Layout>,
-    /// gzip level (0-9) for the HDF5 count datasets; `None` writes them
+    /// gzip level (0-9) for `X` in `DGE.h5ad`, without shuffle as scanpy
+    /// writes it; 4 if the key is absent, `None` (JSON `null`) for
     /// uncompressed. HDF5 compresses on the single writer thread.
-    pub h5_compression: Option<u8>,
+    pub h5ad_compression: Option<u8>,
+    /// gzip level (0-9) for the counts in `matrix.h5`, with byte-shuffle as
+    /// Cell Ranger writes them; 4 if the key is absent, `None` (JSON `null`)
+    /// for uncompressed.
+    pub tenx_h5_compression: Option<u8>,
+    /// Write the Parse matrix as `DGE.mtx.gz` instead of plain `DGE.mtx`
+    pub parse_gzip: bool,
 }
 
 impl Default for OutputParams {
@@ -198,7 +210,9 @@ impl Default for OutputParams {
         Self {
             dir: PathBuf::from("splat_out"),
             layouts: vec![Layout::Parse],
-            h5_compression: None,
+            h5ad_compression: Some(H5_GZIP_DEFAULT),
+            tenx_h5_compression: Some(H5_GZIP_DEFAULT),
+            parse_gzip: false,
         }
     }
 }
@@ -564,8 +578,14 @@ impl SplatParams {
         if self.output.layouts.is_empty() {
             return Err(invalid("output.layouts", "must name at least one layout"));
         }
-        if self.output.h5_compression.is_some_and(|l| l > 9) {
-            return Err(invalid("output.h5_compression", "gzip level must be 0-9"));
+        if self.output.h5ad_compression.is_some_and(|l| l > 9) {
+            return Err(invalid("output.h5ad_compression", "gzip level must be 0-9"));
+        }
+        if self.output.tenx_h5_compression.is_some_and(|l| l > 9) {
+            return Err(invalid(
+                "output.tenx_h5_compression",
+                "gzip level must be 0-9",
+            ));
         }
 
         self.n_cells = Some(self.n_cells());

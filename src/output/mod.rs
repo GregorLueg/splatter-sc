@@ -114,15 +114,17 @@ pub trait Sink: Send {
 /// ### Params
 ///
 /// * `layout` - Target layout
+/// * `parse_gzip` - Whether the Parse matrix is gzipped
 /// * `chunk` - Counts in cell-major CSR
 ///
 /// ### Returns
 ///
-/// The bytes the layout's sink appends: plain MatrixMarket lines for Parse,
-/// one gzip member for 10x mtx, nothing for the HDF5 layouts, which take the
-/// CSR directly.
-pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
+/// The bytes the layout's sink appends: MatrixMarket lines for Parse (one
+/// gzip member if `parse_gzip`), one gzip member for 10x mtx, nothing for the
+/// HDF5 layouts, which take the CSR directly.
+pub fn encode(layout: Layout, parse_gzip: bool, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
     match layout {
+        Layout::Parse if parse_gzip => gzip(&mtx::encode_lines(chunk, true)),
         Layout::Parse => Ok(mtx::encode_lines(chunk, true)),
         Layout::TenxMtx => gzip(&mtx::encode_lines(chunk, false)),
         Layout::H5ad | Layout::TenxH5 => Ok(Vec::new()),
@@ -140,7 +142,6 @@ pub fn encode(layout: Layout, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors>
 /// One sink per layout, in `output.layouts` order.
 pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
     let (p, dir) = (&sim.params, &sim.params.output.dir);
-    let deflate = p.output.h5_compression;
     p.output
         .layouts
         .iter()
@@ -149,9 +150,17 @@ pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
                 Layout::Parse => Box::new(parse::ParseSink::new(dir, p, &sim.cells)?),
                 Layout::TenxMtx => Box::new(tenx_mtx::TenxMtxSink::new(dir, p)?),
                 Layout::H5ad => Box::new(h5ad::H5adSink::new(
-                    dir, p, &sim.cells, &sim.genes, deflate,
+                    dir,
+                    p,
+                    &sim.cells,
+                    &sim.genes,
+                    p.output.h5ad_compression,
                 )?),
-                Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(dir, p, deflate)?),
+                Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(
+                    dir,
+                    p,
+                    p.output.tenx_h5_compression,
+                )?),
             })
         })
         .collect()

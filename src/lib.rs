@@ -236,6 +236,7 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
     let setup = t0.elapsed();
 
     let layouts = sim.params.output.layouts.clone();
+    let parse_gzip = sim.params.output.parse_gzip;
     let n_chunks = sim.n_chunks();
     let n_cells = sim.cells.n_cells();
     let window = rayon::current_num_threads() * CHUNKS_PER_THREAD;
@@ -269,7 +270,7 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
                     let chunk = sim.chunk(i)?;
                     let encoded = layouts
                         .iter()
-                        .map(|&l| encode(l, &chunk))
+                        .map(|&l| encode(l, parse_gzip, &chunk))
                         .collect::<Result<_, _>>()?;
                     Ok((chunk, encoded))
                 })

@@ -28,7 +28,9 @@ fn small_params(dir: &Path, seed: u64) -> SplatParams {
         output: OutputParams {
             dir: dir.to_path_buf(),
             layouts: vec![Layout::Parse, Layout::TenxMtx, Layout::H5ad, Layout::TenxH5],
-            h5_compression: Some(1),
+            h5ad_compression: Some(1),
+            tenx_h5_compression: Some(1),
+            parse_gzip: false,
         },
         ..Default::default()
     }
@@ -115,6 +117,23 @@ fn test_run_parse_mtx_header_matches_body() {
         .collect();
     assert!(last[0] <= 9000 && last[1] <= 300 && last[2] > 0);
     assert!(!a.path().join("DGE.mtx.body.tmp").exists());
+}
+
+#[test]
+fn test_run_parse_gzip_decompresses_to_plain_mtx() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    run_with_threads(small_params(a.path(), 13), 2);
+    let mut p = small_params(b.path(), 13);
+    p.output.parse_gzip = true;
+    run_with_threads(p, 2);
+    assert!(!b.path().join("DGE.mtx").exists());
+    assert!(!b.path().join("DGE.mtx.gz.body.tmp").exists());
+    let mut gz = Vec::new();
+    MultiGzDecoder::new(std::fs::File::open(b.path().join("DGE.mtx.gz")).unwrap())
+        .read_to_end(&mut gz)
+        .unwrap();
+    assert!(gz == std::fs::read(a.path().join("DGE.mtx")).unwrap());
 }
 
 /// Zero-based `(cell, gene, count)` triplets.

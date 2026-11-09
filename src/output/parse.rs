@@ -1,13 +1,13 @@
 //! Parse Biosciences layout, as single-cell-benchmark reads it:
 //! `DGE.mtx` (cells x genes, 1-based, sorted by cell then gene, no comment
-//! lines), `cell_metadata.csv` (`bc_wells`, `sample` = batch, ...) and
+//! lines; `DGE.mtx.gz` with `output.parse_gzip`), `cell_metadata.csv` (`bc_wells`, `sample` = batch, ...) and
 //! `all_genes.csv` (`gene_id,gene_name,genome`).
 
 use std::io::Write;
 use std::path::Path;
 
 use super::mtx::{MTX_BANNER, MtxBody};
-use super::{Sink, create};
+use super::{Sink, create, gzip};
 use crate::cells::{CellChunk, CellMeta};
 use crate::errors::SplatErrors;
 use crate::output::tables::cell_table;
@@ -26,8 +26,10 @@ const GENOME: &str = "sim";
 
 /// Writer for the Parse layout.
 pub struct ParseSink {
-    /// Streaming `DGE.mtx` body
+    /// Streaming `DGE.mtx` body, gzip members if `gz`
     body: MtxBody,
+    /// Whether the matrix is `DGE.mtx.gz`
+    gz: bool,
     /// Number of cells
     n_cells: usize,
     /// Number of genes
@@ -58,8 +60,11 @@ impl ParseSink {
         }
         f.flush()?;
 
+        let gz = params.output.parse_gzip;
+        let name = if gz { "DGE.mtx.gz" } else { "DGE.mtx" };
         Ok(Self {
-            body: MtxBody::new(dir.join("DGE.mtx"))?,
+            body: MtxBody::new(dir.join(name))?,
+            gz,
             n_cells: params.n_cells(),
             n_genes: params.n_genes,
         })
@@ -76,6 +81,11 @@ impl Sink for ParseSink {
             "{MTX_BANNER}{} {} {}\n",
             self.n_cells, self.n_genes, self.body.nnz
         );
-        self.body.finish(header.as_bytes())
+        let header = if self.gz {
+            gzip(header.as_bytes())?
+        } else {
+            header.into_bytes()
+        };
+        self.body.finish(&header)
     }
 }

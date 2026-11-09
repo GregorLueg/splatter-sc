@@ -107,13 +107,23 @@ impl<T: H5Type> Appender<T> {
     /// * `group` - Parent group
     /// * `name` - Dataset name
     /// * `deflate` - Optional gzip level
+    /// * `shuffle` - Byte-shuffle before gzip, as Cell Ranger does; ignored
+    ///   without `deflate`
     ///
     /// ### Returns
     ///
     /// The appender.
-    pub fn new(group: &Group, name: &str, deflate: Option<u8>) -> Result<Self, SplatErrors> {
+    pub fn new(
+        group: &Group,
+        name: &str,
+        deflate: Option<u8>,
+        shuffle: bool,
+    ) -> Result<Self, SplatErrors> {
         let mut b = group.new_dataset::<T>().shape(0..).chunk(H5_CHUNK);
         if let Some(level) = deflate {
+            if shuffle {
+                b = b.shuffle();
+            }
             b = b.deflate(level);
         }
         Ok(Self {

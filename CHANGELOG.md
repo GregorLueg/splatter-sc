@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1
+
+### Output
+
+- `output.h5_compression` is split in two, each defaulting to what the
+  original tool writes. Configs using the old key are rejected.
+- `tenx_h5_compression`: gzip level 4 by default, with byte-shuffle in front,
+  as Cell Ranger writes `matrix.h5`. `null` for uncompressed.
+- `h5ad_compression`: gzip level 4 by default without shuffle, as scanpy's
+  `sc.write`. `null` for uncompressed.
+- `output.parse_gzip` writes the Parse matrix as `DGE.mtx.gz`, compressed in
+  parallel on the simulation threads. Off by default.
+
 ## 0.1.0
 
 First release. A fresh Rust port of splatter's Splat simulator, shipped as the

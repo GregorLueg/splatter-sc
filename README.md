@@ -95,15 +95,15 @@ Plus one set of files per layout:
 | `parse` | `DGE.mtx` or `DGE.mtx.gz` (cells x genes), `cell_metadata.csv`, `all_genes.csv` |
 | `tenx_mtx` | `tenx/matrix.mtx.gz` (genes x cells), `barcodes.tsv.gz`, `features.tsv.gz` |
 | `h5ad` | `DGE.h5ad`, float32 CSR with cells as rows, truth in `obs` and `var` |
-| `tenx_h5` | `matrix.h5`, Cell Ranger v3 layout |
+| `tenx_h5` | `matrix.h5`, Cell Ranger v3 layout (genes x cells CSC under `/matrix`) |
 
 Compression follows what the original tools write:
 
 - `tenx_mtx` is always gzipped (level 6, like the `gzip` CLI).
-- `tenx_h5_compression` sets the gzip level (0-9) of the counts in
-  `matrix.h5`, with the byte-shuffle filter in front, as Cell Ranger writes
-  it. Defaults to 4 (h5py's gzip level); `null` for uncompressed.
-- `h5ad_compression` does the same for `X` in `DGE.h5ad`, without shuffle.
+- `tenx_h5_compression` sets the gzip level (0-9) of every dataset in
+  `matrix.h5` except `features/_all_tag_keys`, which stays contiguous.
+  Defaults to 4 (h5py's gzip level); `null` for uncompressed.
+- `h5ad_compression` sets the gzip level of every dataset in `DGE.h5ad`.
   Defaults to 4, as scanpy's `sc.write` (anndata's `write_h5ad` itself
   defaults to uncompressed); `null` for uncompressed.
 - All compression runs in parallel on the simulation threads; the writer
@@ -111,6 +111,37 @@ Compression follows what the original tools write:
 - `parse_gzip: true` writes `DGE.mtx.gz` instead of `DGE.mtx` (level 6,
   compressed in parallel). Off by default, since Parse's own pipeline writes
   it plain.
+
+The HDF5 files mirror the originals down to dtypes, filters and chunk shapes,
+checked dataset by dataset with h5py:
+
+- `DGE.h5ad` matches `anndata.write_h5ad(compression="gzip")`: no shuffle,
+  chunk lengths from h5py's `guess_chunk`, `X/*` resizable, `X/indptr` int32
+  while nnz fits (int64 beyond), categorical codes in pandas' narrowest int
+  (int8 below 127 categories).
+- `matrix.h5` matches Cell Ranger's h5py writer, as in Space Ranger 2.1 files:
+  `data`, `indices`, `indptr` and `shape` resizable in 80000-element chunks
+  with shuffle plus gzip; strings NUL-padded fixed-width ASCII as wide as
+  their longest entry, gzipped without shuffle; root attributes `filetype`,
+  `version`, `software_version`, `chemistry_description`, `library_ids` and
+  `original_gem_groups`. Older Cell Ranger releases (e.g. 4.0) wrote gzip 1,
+  65536-element chunks and `|S256` strings instead.
+
+Known differences:
+
+- **h5ad `X/data` and `X/indices` chunk length.** h5py derives it from the
+  final nnz, which a streaming writer does not know up front. splatter-sc
+  extrapolates nnz from the first 256 cells, so the chunk length is typically
+  within a few percent of what anndata would pick (10k cells x 19k genes:
+  10591 vs 10436, 1.5%). Near one of h5py's halving steps the estimate can land
+  on the other side and give a chunk twice or half as long. The stored values
+  are identical either way; only the chunk layout, and so read and compression
+  performance, can differ slightly.
+- **h5ad `X/indices` dtype.** Always int32. anndata switches it to int64
+  together with `indptr` once nnz exceeds 2^31 - 1; readers accept both.
+- **h5ad `_index` with pandas 3.** anndata on pandas 3 writes the index as a
+  nullable string array (`mask` + `values`); splatter-sc writes the plain
+  string array that anndata on pandas 2 writes.
 
 ## How close is this to splatter?
 

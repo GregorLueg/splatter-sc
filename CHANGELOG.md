@@ -10,6 +10,9 @@
   as Cell Ranger writes `matrix.h5`. `null` for uncompressed.
 - `h5ad_compression`: gzip level 4 by default without shuffle, as scanpy's
   `sc.write`. `null` for uncompressed.
+- HDF5 compression moved off the writer thread: the encoder shuffles and
+  zlib-compresses whole HDF5 chunks in parallel on the simulation threads,
+  and the writer stores them with `H5Dwrite_chunk`.
 - `output.parse_gzip` writes the Parse matrix as `DGE.mtx.gz`, compressed in
   parallel on the simulation threads. Off by default.
 

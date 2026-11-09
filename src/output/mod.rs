@@ -1,6 +1,7 @@
 //! Output layouts. Each layout is a [`Sink`] that receives chunks in cell
-//! order on one writer thread. Text encoding of a chunk happens beforehand
-//! on the worker threads via [`encode`], so the writer only appends bytes.
+//! order on one writer thread. Encoding happens beforehand on the worker
+//! threads, via [`encode`] for text and [`H5Encoder`] for HDF5 chunks, so
+//! the writer only appends bytes.
 
 mod h5;
 pub mod h5ad;
@@ -9,6 +10,8 @@ pub mod parse;
 pub mod tables;
 pub mod tenx_h5;
 pub mod tenx_mtx;
+
+pub use h5::{H5Chunks, H5Encoder};
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -97,6 +100,21 @@ pub trait Sink: Send {
     /// `Ok(())` or an IO error.
     fn write_chunk(&mut self, chunk: &CellChunk, encoded: &[u8]) -> Result<(), SplatErrors>;
 
+    /// Store filtered HDF5 chunks from this layout's [`H5Encoder`]. Only the
+    /// HDF5 sinks receive any; the default does nothing.
+    ///
+    /// ### Params
+    ///
+    /// * `chunks` - Filtered `data` and `indices` chunks, in order
+    ///
+    /// ### Returns
+    ///
+    /// `Ok(())` or an HDF5 error.
+    fn write_h5(&mut self, chunks: &H5Chunks) -> Result<(), SplatErrors> {
+        let _ = chunks;
+        Ok(())
+    }
+
     /// Flush and finalise all files.
     ///
     /// ### Returns
@@ -121,7 +139,7 @@ pub trait Sink: Send {
 ///
 /// The bytes the layout's sink appends: MatrixMarket lines for Parse (one
 /// gzip member if `parse_gzip`), one gzip member for 10x mtx, nothing for the
-/// HDF5 layouts, which take the CSR directly.
+/// HDF5 layouts, which go through [`H5Encoder`] once per window.
 pub fn encode(layout: Layout, parse_gzip: bool, chunk: &CellChunk) -> Result<Vec<u8>, SplatErrors> {
     match layout {
         Layout::Parse if parse_gzip => gzip(&mtx::encode_lines(chunk, true)),

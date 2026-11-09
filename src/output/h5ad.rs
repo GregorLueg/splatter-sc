@@ -1,20 +1,33 @@
 //! AnnData `DGE.h5ad` (anndata on-disk format 0.1.0): `X` as float32 CSR
 //! with cells as rows, `obs` with splatter's cell truth plus `sample` (a
 //! copy of `Batch`, the benchmark's batch key), `var` with the gene truth.
-//! `X/data` and `X/indices` stream into resizable datasets; `X/indptr` is
-//! kept in memory (8 bytes per cell) and written at the end.
+//! `X/data` and `X/indices` arrive as filtered chunks from the encoder;
+//! `X/indptr` is kept in memory (8 bytes per cell) and written at the end.
 
 use std::path::Path;
 
 use hdf5::{File, Group};
 
 use super::Sink;
-use super::h5::{Appender, encoding, vlu, write_1d};
+use super::h5::{ChunkWriter, H5Chunks, encoding, vlu, write_1d};
 use crate::cells::{CellChunk, CellMeta};
 use crate::errors::SplatErrors;
 use crate::genes::GeneTruth;
 use crate::output::tables::{cell_name, gene_name};
 use crate::params::{Method, SplatParams};
+
+////////////
+// Consts //
+////////////
+
+/// Element type of `X/data`.
+pub(crate) type Data = f32;
+
+/// Element type of `X/indices`.
+pub(crate) type Indices = i32;
+
+/// No byte-shuffle before gzip, as scanpy and anndata write `X`.
+pub(crate) const SHUFFLE: bool = false;
 
 /////////////
 // Helpers //
@@ -123,9 +136,9 @@ pub struct H5adSink {
     /// `X` group, for `indptr` at the end
     x: Group,
     /// `X/data`
-    data: Appender<f32>,
+    data: ChunkWriter,
     /// `X/indices`
-    indices: Appender<i32>,
+    indices: ChunkWriter,
     /// `X/indptr`, accumulated
     indptr: Vec<i64>,
 }
@@ -139,7 +152,7 @@ impl H5adSink {
     /// * `params` - Resolved parameters
     /// * `cells` - Cell metadata
     /// * `genes` - Gene truth
-    /// * `deflate` - Optional gzip level for `X`; no shuffle, as scanpy
+    /// * `deflate` - Optional gzip level for `X`
     ///
     /// ### Returns
     ///
@@ -210,8 +223,8 @@ impl H5adSink {
         indptr.push(0);
 
         Ok(Self {
-            data: Appender::new(&x, "data", deflate, false)?,
-            indices: Appender::new(&x, "indices", deflate, false)?,
+            data: ChunkWriter::new::<Data>(&x, "data", deflate, SHUFFLE)?,
+            indices: ChunkWriter::new::<Indices>(&x, "indices", deflate, SHUFFLE)?,
             x,
             indptr,
             _file: file,
@@ -221,14 +234,15 @@ impl H5adSink {
 
 impl Sink for H5adSink {
     fn write_chunk(&mut self, chunk: &CellChunk, _encoded: &[u8]) -> Result<(), SplatErrors> {
-        let data: Vec<f32> = chunk.counts.iter().map(|&x| x as f32).collect();
-        let indices: Vec<i32> = chunk.indices.iter().map(|&g| g as i32).collect();
-        self.data.append(&data)?;
-        self.indices.append(&indices)?;
         let base = *self.indptr.last().expect("indptr starts with 0");
         self.indptr
             .extend(chunk.indptr[1..].iter().map(|&p| base + p as i64));
         Ok(())
+    }
+
+    fn write_h5(&mut self, chunks: &H5Chunks) -> Result<(), SplatErrors> {
+        self.data.write(&chunks.data, chunks.data_len)?;
+        self.indices.write(&chunks.indices, chunks.indices_len)
     }
 
     fn finish(self: Box<Self>) -> Result<(), SplatErrors> {

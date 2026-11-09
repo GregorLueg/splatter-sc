@@ -195,7 +195,7 @@ pub struct OutputParams {
     pub layouts: Vec<Layout>,
     /// gzip level (0-9) for `X` in `DGE.h5ad`, without shuffle as scanpy
     /// writes it; 4 if the key is absent, `None` (JSON `null`) for
-    /// uncompressed. HDF5 compresses on the single writer thread.
+    /// uncompressed.
     pub h5ad_compression: Option<u8>,
     /// gzip level (0-9) for the counts in `matrix.h5`, with byte-shuffle as
     /// Cell Ranger writes them; 4 if the key is absent, `None` (JSON `null`)

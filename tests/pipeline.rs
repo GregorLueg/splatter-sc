@@ -198,11 +198,32 @@ fn csr_triplets(indptr: &[i64], indices: &[i64], data: &[u32]) -> Triplets {
 
 #[test]
 fn test_run_h5_and_tenx_match_parse_mtx() {
+    check_h5_and_tenx_match_parse_mtx(Some(1));
+}
+
+#[test]
+fn test_run_uncompressed_h5_and_tenx_match_parse_mtx() {
+    check_h5_and_tenx_match_parse_mtx(None);
+}
+
+/// Run once and check that the 10x mtx and both HDF5 layouts hold exactly
+/// the Parse mtx counts. The run spans several HDF5 chunks plus a partial
+/// tail chunk.
+///
+/// ### Params
+///
+/// * `level` - gzip level of both HDF5 layouts, `None` for uncompressed
+fn check_h5_and_tenx_match_parse_mtx(level: Option<u8>) {
     let a = tempfile::tempdir().unwrap();
-    run_with_threads(small_params(a.path(), 11), 2);
+    let mut p = small_params(a.path(), 11);
+    p.output.h5ad_compression = level;
+    p.output.tenx_h5_compression = level;
+    run_with_threads(p, 2);
     let text = std::fs::read_to_string(a.path().join("DGE.mtx")).unwrap();
     let (dims, parse) = mtx_triplets(&text, true);
     assert_eq!(dims, (9000, 300));
+    // More than one HDF5 chunk (2^18 elements) and not a whole number of them.
+    assert!(parse.len() > 1 << 18 && parse.len() % (1 << 18) != 0);
 
     // The 10x mtx is several gzip members back to back.
     let mut text = String::new();

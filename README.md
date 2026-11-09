@@ -106,7 +106,8 @@ Compression follows what the original tools write:
 - `h5ad_compression` does the same for `X` in `DGE.h5ad`, without shuffle.
   Defaults to 4, as scanpy's `sc.write` (anndata's `write_h5ad` itself
   defaults to uncompressed); `null` for uncompressed.
-- HDF5 compresses on the single writer thread, not the simulation pool.
+- All compression runs in parallel on the simulation threads; the writer
+  thread only stores finished bytes.
 - `parse_gzip: true` writes `DGE.mtx.gz` instead of `DGE.mtx` (level 6,
   compressed in parallel). Off by default, since Parse's own pipeline writes
   it plain.

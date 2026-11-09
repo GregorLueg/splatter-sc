@@ -9,7 +9,7 @@ use hdf5::types::FixedAscii;
 use hdf5::{File, Group};
 
 use super::Sink;
-use super::h5::{Appender, write_1d};
+use super::h5::{ChunkWriter, H5Chunks, write_1d};
 use crate::cells::CellChunk;
 use crate::errors::{SplatErrors, invalid};
 use crate::output::tables::{cell_name, gene_name};
@@ -24,6 +24,15 @@ type Name = FixedAscii<31>;
 
 /// Genome label in `features/genome`.
 const GENOME: &str = "sim";
+
+/// Element type of `matrix/data`.
+pub(crate) type Data = i32;
+
+/// Element type of `matrix/indices`.
+pub(crate) type Indices = i64;
+
+/// Byte-shuffle before gzip, as Cell Ranger writes the matrix.
+pub(crate) const SHUFFLE: bool = true;
 
 /////////////
 // Helpers //
@@ -55,9 +64,9 @@ pub struct TenxH5Sink {
     /// `/matrix` group, for `indptr` at the end
     matrix: Group,
     /// `matrix/data`
-    data: Appender<i32>,
+    data: ChunkWriter,
     /// `matrix/indices`
-    indices: Appender<i64>,
+    indices: ChunkWriter,
     /// `matrix/indptr`, accumulated
     indptr: Vec<i64>,
 }
@@ -69,8 +78,7 @@ impl TenxH5Sink {
     ///
     /// * `dir` - Output directory
     /// * `params` - Resolved parameters
-    /// * `deflate` - Optional gzip level for `data` and `indices`, applied
-    ///   after byte-shuffle as Cell Ranger does
+    /// * `deflate` - Optional gzip level for `data` and `indices`
     ///
     /// ### Returns
     ///
@@ -99,8 +107,8 @@ impl TenxH5Sink {
         let mut indptr = Vec::with_capacity(n_cells + 1);
         indptr.push(0);
         Ok(Self {
-            data: Appender::new(&matrix, "data", deflate, true)?,
-            indices: Appender::new(&matrix, "indices", deflate, true)?,
+            data: ChunkWriter::new::<Data>(&matrix, "data", deflate, SHUFFLE)?,
+            indices: ChunkWriter::new::<Indices>(&matrix, "indices", deflate, SHUFFLE)?,
             matrix,
             indptr,
             _file: file,
@@ -110,14 +118,15 @@ impl TenxH5Sink {
 
 impl Sink for TenxH5Sink {
     fn write_chunk(&mut self, chunk: &CellChunk, _encoded: &[u8]) -> Result<(), SplatErrors> {
-        let data: Vec<i32> = chunk.counts.iter().map(|&x| x as i32).collect();
-        let indices: Vec<i64> = chunk.indices.iter().map(|&g| g as i64).collect();
-        self.data.append(&data)?;
-        self.indices.append(&indices)?;
         let base = *self.indptr.last().expect("indptr starts with 0");
         self.indptr
             .extend(chunk.indptr[1..].iter().map(|&p| base + p as i64));
         Ok(())
+    }
+
+    fn write_h5(&mut self, chunks: &H5Chunks) -> Result<(), SplatErrors> {
+        self.data.write(&chunks.data, chunks.data_len)?;
+        self.indices.write(&chunks.indices, chunks.indices_len)
     }
 
     fn finish(self: Box<Self>) -> Result<(), SplatErrors> {

@@ -673,6 +673,7 @@ dependencies = [
  "approx",
  "flate2",
  "hdf5-metno",
+ "hdf5-metno-sys",
  "rand",
  "rand_chacha",
  "rand_distr",

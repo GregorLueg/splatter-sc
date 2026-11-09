@@ -37,7 +37,7 @@ use crate::cells::{CellChunk, CellMeta, simulate_chunk};
 use crate::errors::SplatErrors;
 use crate::genes::{GeneTruth, Profiles};
 use crate::output::{H5Chunks, H5Encoder, encode, write_gz};
-use crate::params::{Method, SplatParams};
+use crate::params::{Layout, Method, SplatParams};
 
 ////////////
 // Consts //
@@ -179,6 +179,19 @@ impl Simulation {
             &mut rng,
         )
     }
+
+    /// Total nonzeros extrapolated from chunk 0. Sizes the h5ad chunks,
+    /// which h5py derives from the final length that a streamed write does
+    /// not know yet. Chunk 0 does not depend on the thread count, so
+    /// neither does the file layout.
+    ///
+    /// ### Returns
+    ///
+    /// The estimate.
+    pub fn nnz_hint(&self) -> Result<usize, SplatErrors> {
+        let c = self.chunk(0)?;
+        Ok(c.counts.len() * self.cells.n_cells() / c.n_cells())
+    }
 }
 
 ////////////////
@@ -235,7 +248,12 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
         &dir.join("genes_truth.tsv.gz"),
         &output::tables::gene_table(&sim.genes, '\t'),
     )?;
-    let sinks = output::open_sinks(&sim)?;
+    let nnz_hint = if sim.params.output.layouts.contains(&Layout::H5ad) {
+        sim.nnz_hint()?
+    } else {
+        0
+    };
+    let sinks = output::open_sinks(&sim, nnz_hint)?;
     let setup = t0.elapsed();
 
     let layouts = sim.params.output.layouts.clone();
@@ -247,7 +265,7 @@ pub fn run(params: SplatParams) -> Result<RunSummary, SplatErrors> {
     // `run` was called in, and the writer thread would use the global one.
     let mut encoders: Vec<Option<H5Encoder>> = layouts
         .iter()
-        .map(|&l| H5Encoder::new(l, &sim.params.output))
+        .map(|&l| H5Encoder::new(l, &sim.params.output, nnz_hint))
         .collect();
 
     // Cell chunks with their per-layout text, plus per-layout HDF5 chunks.

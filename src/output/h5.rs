@@ -25,10 +25,10 @@ use crate::params::{Layout, OutputParams};
 // Consts //
 ////////////
 
-/// Elements per HDF5 chunk of the streamed `data` / `indices` datasets.
-/// 2^18 elements is 1 MB of `f32`, in the range anndata and Cell Ranger
-/// files use; large enough that chunk indexing stays cheap at 1e10 entries.
-const H5_CHUNK: usize = 1 << 18;
+/// h5py's `CHUNK_BASE`, `CHUNK_MIN` and `CHUNK_MAX`, in bytes.
+const CHUNK_BASE: f64 = 16384.0;
+const CHUNK_MIN: f64 = 8192.0;
+const CHUNK_MAX: f64 = 1048576.0;
 
 /////////////
 // Helpers //
@@ -82,13 +82,42 @@ pub(crate) fn encoding(loc: &Location, kind: &str, version: &str) -> Result<(), 
     attr_str(loc, "encoding-version", version)
 }
 
-/// Write a 1-D dataset in one go.
+/// h5py's `guess_chunk` for a 1-D dataset: the chunk length h5py, and so
+/// anndata and Cell Ranger, pick when no chunk shape is given.
+///
+/// ### Params
+///
+/// * `n` - Dataset length; 0 counts as 1024, as in h5py
+/// * `itemsize` - Bytes per element (8 for variable-length strings)
+///
+/// ### Returns
+///
+/// Elements per chunk.
+pub(crate) fn guess_chunk(n: usize, itemsize: usize) -> usize {
+    let n = if n == 0 { 1024 } else { n };
+    let target = (CHUNK_BASE * 2f64.powf(((n * itemsize) as f64 / CHUNK_MAX).log10()))
+        .clamp(CHUNK_MIN, CHUNK_MAX);
+    let mut c = n;
+    loop {
+        let bytes = (c * itemsize) as f64;
+        if ((bytes < target || (bytes - target).abs() / target < 0.5) && bytes < CHUNK_MAX)
+            || c == 1
+        {
+            return c;
+        }
+        c = c.div_ceil(2);
+    }
+}
+
+/// Write a 1-D dataset in one go. Contiguous without `deflate`; with it,
+/// gzip over h5py's guessed chunk, as h5py writes `compression="gzip"`.
 ///
 /// ### Params
 ///
 /// * `group` - Parent group
 /// * `name` - Dataset name
 /// * `data` - Values
+/// * `deflate` - Optional gzip level
 ///
 /// ### Returns
 ///
@@ -97,8 +126,49 @@ pub(crate) fn write_1d<T: H5Type>(
     group: &Group,
     name: &str,
     data: &[T],
+    deflate: Option<u8>,
 ) -> Result<Dataset, SplatErrors> {
-    Ok(group.new_dataset_builder().with_data(data).create(name)?)
+    let mut b = group.new_dataset_builder().with_data(data);
+    if let Some(level) = deflate {
+        b = b
+            .chunk(guess_chunk(data.len(), size_of::<T>()))
+            .deflate(level);
+    }
+    Ok(b.create(name)?)
+}
+
+/// Write a 1-D dataset in one go as resizable (`maxshape=(None,)`) and
+/// chunked, as anndata writes `X/indptr` and Cell Ranger `indptr`/`shape`.
+///
+/// ### Params
+///
+/// * `group` - Parent group
+/// * `name` - Dataset name
+/// * `data` - Values
+/// * `chunk` - Elements per chunk
+/// * `deflate` - Optional gzip level
+/// * `shuffle` - Byte-shuffle before gzip; ignored without `deflate`
+///
+/// ### Returns
+///
+/// `Ok(())` or an HDF5 error.
+pub(crate) fn write_1d_resizable<T: H5Type>(
+    group: &Group,
+    name: &str,
+    data: &[T],
+    chunk: usize,
+    deflate: Option<u8>,
+    shuffle: bool,
+) -> Result<(), SplatErrors> {
+    let mut b = group.new_dataset::<T>().shape(data.len()..).chunk(chunk);
+    if let Some(level) = deflate {
+        if shuffle {
+            b = b.shuffle();
+        }
+        b = b.deflate(level);
+    }
+    b.create(name)?.write(data)?;
+    Ok(())
 }
 
 //////////////
@@ -193,6 +263,8 @@ struct ChunkStream {
     deflate: Option<u8>,
     /// Whether to byte-shuffle before zlib
     shuffle: bool,
+    /// Elements per HDF5 chunk
+    chunk: usize,
 }
 
 impl ChunkStream {
@@ -202,17 +274,19 @@ impl ChunkStream {
     ///
     /// * `deflate` - Optional zlib level, as set on the dataset
     /// * `shuffle` - Shuffle flag, as set on the dataset
+    /// * `chunk` - Elements per chunk, as set on the dataset
     ///
     /// ### Returns
     ///
     /// The stream.
-    fn new<T: ChunkElem>(deflate: Option<u8>, shuffle: bool) -> Self {
+    fn new<T: ChunkElem>(deflate: Option<u8>, shuffle: bool, chunk: usize) -> Self {
         Self {
             elem: size_of::<T>(),
             buf: Vec::new(),
             len: 0,
             deflate,
             shuffle,
+            chunk,
         }
     }
 
@@ -242,7 +316,7 @@ impl ChunkStream {
     /// The filtered chunks in order, and the dataset length once they are
     /// written.
     fn take(&mut self, tail: bool) -> Result<(Vec<Vec<u8>>, usize), SplatErrors> {
-        let cb = H5_CHUNK * self.elem;
+        let cb = self.chunk * self.elem;
         let full = self.buf.len() / cb * cb;
         if tail && self.buf.len() > full {
             self.buf.resize(full + cb, 0);
@@ -306,26 +380,27 @@ impl H5Encoder {
     ///
     /// * `layout` - Output layout
     /// * `output` - Output parameters, for the compression level
+    /// * `nnz_hint` - Expected total nonzeros, for the h5ad chunk length
     ///
     /// ### Returns
     ///
     /// The encoder, or `None` for the mtx layouts.
-    pub fn new(layout: Layout, output: &OutputParams) -> Option<Self> {
+    pub fn new(layout: Layout, output: &OutputParams, nnz_hint: usize) -> Option<Self> {
         let (kind, data, indices) = match layout {
             Layout::H5ad => {
-                let d = output.h5ad_compression;
+                let (d, c) = (output.h5ad_compression, h5ad::x_chunk(nnz_hint));
                 (
                     H5Kind::H5ad,
-                    ChunkStream::new::<h5ad::Data>(d, h5ad::SHUFFLE),
-                    ChunkStream::new::<h5ad::Indices>(d, h5ad::SHUFFLE),
+                    ChunkStream::new::<h5ad::Data>(d, h5ad::SHUFFLE, c),
+                    ChunkStream::new::<h5ad::Indices>(d, h5ad::SHUFFLE, c),
                 )
             }
             Layout::TenxH5 => {
-                let d = output.tenx_h5_compression;
+                let (d, c) = (output.tenx_h5_compression, tenx_h5::CHUNK);
                 (
                     H5Kind::TenxH5,
-                    ChunkStream::new::<tenx_h5::Data>(d, tenx_h5::SHUFFLE),
-                    ChunkStream::new::<tenx_h5::Indices>(d, tenx_h5::SHUFFLE),
+                    ChunkStream::new::<tenx_h5::Data>(d, tenx_h5::SHUFFLE, c),
+                    ChunkStream::new::<tenx_h5::Indices>(d, tenx_h5::SHUFFLE, c),
                 )
             }
             Layout::Parse | Layout::TenxMtx => return None,
@@ -409,6 +484,8 @@ pub(crate) struct ChunkWriter {
     ds: Dataset,
     /// Chunks written so far
     n_chunks: usize,
+    /// Elements per chunk
+    chunk: usize,
 }
 
 impl ChunkWriter {
@@ -422,6 +499,7 @@ impl ChunkWriter {
     /// * `name` - Dataset name
     /// * `deflate` - Optional gzip level
     /// * `shuffle` - Byte-shuffle before gzip; ignored without `deflate`
+    /// * `chunk` - Elements per chunk
     ///
     /// ### Returns
     ///
@@ -431,8 +509,9 @@ impl ChunkWriter {
         name: &str,
         deflate: Option<u8>,
         shuffle: bool,
+        chunk: usize,
     ) -> Result<Self, SplatErrors> {
-        let mut b = group.new_dataset::<T>().shape(0..).chunk(H5_CHUNK);
+        let mut b = group.new_dataset::<T>().shape(0..).chunk(chunk);
         if let Some(level) = deflate {
             if shuffle {
                 b = b.shuffle();
@@ -442,6 +521,7 @@ impl ChunkWriter {
         Ok(Self {
             ds: b.create(name)?,
             n_chunks: 0,
+            chunk,
         })
     }
 
@@ -463,7 +543,7 @@ impl ChunkWriter {
         self.ds.resize(len)?;
         let id = self.ds.id();
         for c in chunks {
-            let offset = self.n_chunks * H5_CHUNK;
+            let offset = self.n_chunks * self.chunk;
             let start = [offset as hsize_t];
             // Filter mask 0: every filter in the pipeline was applied.
             let status = hdf5::sync::sync(|| unsafe {
@@ -482,5 +562,39 @@ impl ChunkWriter {
             self.n_chunks += 1;
         }
         Ok(())
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_guess_chunk_matches_h5py() {
+        // (n, itemsize, chunk) from h5py 3.16 `filters.guess_chunk`.
+        let cases = [
+            (0, 4, 1024),
+            (1, 8, 1),
+            (24, 8, 24),
+            (10000, 1, 10000),
+            (10001, 4, 2501),
+            (10000, 8, 1250),
+            (19273, 8, 1205),
+            (100001, 8, 1563),
+            (1000001, 8, 3907),
+            (6000000, 4, 11719),
+            (10685844, 4, 10436),
+            (107279791, 4, 26192),
+            (1072778635, 4, 65478),
+            (119289764, 4, 29124),
+            (10000000000, 4, 76294),
+        ];
+        for (n, s, c) in cases {
+            assert_eq!(guess_chunk(n, s), c, "n = {n}, itemsize = {s}");
+        }
     }
 }

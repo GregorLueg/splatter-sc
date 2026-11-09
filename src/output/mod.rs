@@ -154,11 +154,12 @@ pub fn encode(layout: Layout, parse_gzip: bool, chunk: &CellChunk) -> Result<Vec
 /// ### Params
 ///
 /// * `sim` - The simulation
+/// * `nnz_hint` - Expected total nonzeros, for the h5ad chunk length
 ///
 /// ### Returns
 ///
 /// One sink per layout, in `output.layouts` order.
-pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
+pub fn open_sinks(sim: &Simulation, nnz_hint: usize) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
     let (p, dir) = (&sim.params, &sim.params.output.dir);
     p.output
         .layouts
@@ -173,6 +174,7 @@ pub fn open_sinks(sim: &Simulation) -> Result<Vec<Box<dyn Sink>>, SplatErrors> {
                     &sim.cells,
                     &sim.genes,
                     p.output.h5ad_compression,
+                    nnz_hint,
                 )?),
                 Layout::TenxH5 => Box::new(tenx_h5::TenxH5Sink::new(
                     dir,

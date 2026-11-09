@@ -46,9 +46,12 @@ use crate::params::{Method, SplatParams};
 /// Cells per chunk. Each chunk has its own RNG stream, so this fixes the
 /// output for a seed; changing it changes every simulated count. Memory in
 /// flight is about `2 * threads * CHUNKS_PER_THREAD * CELL_CHUNK` cells of
-/// CSR plus encoded output, ~20 bytes per nonzero before HDF5 chunk buffers. At splatter's default
+/// CSR plus encoded text, ~20 bytes per nonzero. At splatter's default
 /// `lib.loc = 11` (~8k nonzeros per cell over 20k genes) one 256-cell chunk
-/// is ~45 MB.
+/// is ~45 MB. The HDF5 encoders add, for the window being encoded only, its
+/// raw values (8 bytes per nonzero for h5ad, 12 for 10x h5) before they are
+/// cut into chunks; between windows each keeps under one chunk per dataset,
+/// and the compressed chunks in the channel are smaller than the raw values.
 pub const CELL_CHUNK: usize = 256;
 
 /// Chunks per thread in one window. Two windows are alive at most, one
